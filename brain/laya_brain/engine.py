@@ -650,6 +650,21 @@ def build_runner() -> Any:
     raise RuntimeError("installed laya package has neither Router nor load")
 
 
+def _wants_control(prompt: str) -> bool:
+    if "?" in prompt:
+        return False
+    return bool(re.search(r"\b(open|click|press|tap|hit|type|enter|fill|select|choose|pick|scroll)\b|\bgo to\b", prompt, flags=re.IGNORECASE))
+
+
+def _ask_choice(runner: Any, state: str, key: str, question: Mapping[str, Any]) -> str:
+    criteria = question["criteria"]
+    if len(criteria) == 1:
+        return next(iter(criteria))
+    result = ask_runner(runner, state, {key: question})
+    picked = _choice(result.get("answers") if isinstance(result, Mapping) else {}, key, "")
+    return picked if picked in criteria else ""
+
+
 def _follow_up(
     runner: Any,
     state: str,
@@ -657,27 +672,30 @@ def _follow_up(
     page: Mapping[str, Any] | None,
     answers: Mapping[str, Any] | None,
 ) -> dict[str, Any] | None:
-    """Ask which control, then which menu option, only after the verb is known."""
+    """Ask which control, then which menu option. A done or navigate answer can still pick a link."""
     if not isinstance(answers, Mapping):
         return None
     merged = dict(answers)
     operation = _choice(merged, "operation", "done")
     if ":" in operation:
         return merged
-    question = control_question(page, operation)
+    rescue = operation in {"done", "navigate"} and _wants_control(prompt)
+    question = control_question(page, "click" if rescue else operation)
     if question is None:
         return merged
-    criteria = question["criteria"]
-    if len(criteria) == 1:
-        picked = next(iter(criteria))
-    else:
-        try:
-            second = ask_runner(runner, state, {"target": question})
-        except Exception:
-            return merged
-        picked = _choice(second.get("answers") if isinstance(second, Mapping) else {}, "target", "")
-        if picked not in criteria:
-            return merged
+    if rescue:
+        question = {**question, "criteria": {**question["criteria"], "none": "none of these controls"}}
+    try:
+        picked = _ask_choice(runner, state, "target", question)
+    except Exception:
+        return merged
+    if not picked or (rescue and picked == "none"):
+        return merged
+    if rescue:
+        operation_answer = dict(merged.get("operation") or {})
+        operation_answer["choice"] = "click"
+        merged["operation"] = operation_answer
+        operation = "click"
     merged["target"] = {"choice": picked}
     if operation != "select" or extract_option(prompt):
         return merged
