@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  release:
+    types: [created]
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Test the brain
+        working-directory: brain
+        run: PYTHONPATH=. python -m unittest discover -s tests -v
+
+      - name: Build the gateway
+        working-directory: gateway
+        run: |
+          go test ./...
+          CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o "$RUNNER_TEMP/laya-gateway" .
+
+      - name: Build the command desk
+        working-directory: chat
+        run: |
+          npm ci
+          npm run build
+          tar -C dist -czf "$RUNNER_TEMP/laya-command-desk.tar.gz" .
+
+      - name: Package the extension
+        working-directory: extension
+        run: |
+          npm ci
+          npm test
+          zip -r "$RUNNER_TEMP/laya-extension.zip" . \
+            -x "node_modules/*" "node_modules/**" \
+            -x "tests/*" "package.json" "package-lock.json"
+
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" \
+            "$RUNNER_TEMP/laya-gateway" \
+            "$RUNNER_TEMP/laya-command-desk.tar.gz" \
+            "$RUNNER_TEMP/laya-extension.zip" \
+            --clobber
