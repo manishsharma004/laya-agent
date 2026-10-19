@@ -44,6 +44,10 @@ The page does not change these labels.
 
 The state text is the request, the last four transcript lines, the page title and URL, and up to 24 controls. It is cut at 4000 characters. The full control list is not repeated here. Pass 2 carries the names.
 
+A control whose accessible name is written in the request is clicked, typed, or selected directly. That path is `backend: grounded`. It does not ask the encoder to choose among the other links, so “Open Gmail” clicks the link named Gmail instead of whichever control the model ranks first. A menu whose option was not named still goes through the passes below.
+
+The router keeps one checkpoint resident (`max_loaded=1`). The English and multilingual ModernBERT weights together fill a 4GB GPU, and a forward pass that cannot allocate is retried on CPU.
+
 ## Pass 2, the control list
 
 Only the controls that match the verb are offered. Ids that are not `[A-Za-z0-9_-]+` are dropped.

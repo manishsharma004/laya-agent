@@ -43,7 +43,7 @@ class EngineTests(unittest.TestCase):
 
     def test_click_login(self):
         result = self.engine.decide({"prompt": "click Login", "page": PAGE})
-        self.assertEqual(result["backend"], "heuristic")
+        self.assertEqual(result["backend"], "grounded")
         self.assertEqual(result["action"], {"type": "click", "elementId": "e1", "text": "", "url": ""})
         self.assertFalse(result["needsConfirmation"])
         self.assertIn("Login", result["reply"])
@@ -99,9 +99,10 @@ class EngineTests(unittest.TestCase):
         )
         self.engine._status = "ready"
         result = self.engine.decide({"prompt": "open gmail", "page": page})
-        self.assertEqual(result["backend"], "laya")
+        self.assertEqual(result["backend"], "grounded")
         self.assertEqual(result["action"]["type"], "click")
         self.assertEqual(result["action"]["elementId"], "e5")
+        self.assertIsNone(self.engine._router.seen)
 
     def test_missing_page_does_not_invent_a_click(self):
         result = self.engine.decide({"prompt": "click Login"})
@@ -120,7 +121,7 @@ class EngineTests(unittest.TestCase):
         )
         self.engine._router = runner
         self.engine._status = "ready"
-        result = self.engine.decide({"prompt": "choose Red in Color", "page": PAGE})
+        result = self.engine.decide({"prompt": "choose Red in the menu", "page": PAGE})
         self.assertEqual(result["backend"], "laya")
         self.assertEqual(result["action"]["type"], "select")
         self.assertEqual(result["action"]["elementId"], "e4")
@@ -189,7 +190,7 @@ class EngineTests(unittest.TestCase):
             }
         )
         self.engine._status = "ready"
-        result = self.engine.decide({"prompt": "click Login", "page": page})
+        result = self.engine.decide({"prompt": "open the inbox", "page": page})
         self.assertEqual(result["action"]["elementId"], "e5")
         self.assertEqual(len(self.engine._router.calls), 2)
 
@@ -238,7 +239,7 @@ class EngineTests(unittest.TestCase):
             }
         )
         self.engine._status = "ready"
-        result = self.engine.decide({"prompt": "open gmail", "page": page})
+        result = self.engine.decide({"prompt": "open the inbox", "page": page})
         self.assertEqual(result["action"], {"type": "click", "elementId": "e5", "text": "", "url": ""})
         self.assertIn("none", self.engine._router.calls[1][1]["target"]["criteria"])
 
@@ -305,6 +306,36 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(result["action"]["type"], "click")
         self.assertTrue(result["action"]["elementId"].startswith("e"))
         self.assertGreater(runner.calls, 2)
+
+    def test_named_link_beats_the_search_box_button(self):
+        page = {
+            "url": "https://www.google.com/",
+            "title": "Google",
+            "elements": [
+                {"id": "e1", "role": "link", "name": "About", "tag": "a", "href": "https://about.google/"},
+                {"id": "e2", "role": "link", "name": "Gmail", "tag": "a", "href": "https://mail.google.com/mail/"},
+                {"id": "e3", "role": "button", "name": "Add files and tools", "tag": "button"},
+                {"id": "e4", "role": "button", "name": "Google Search", "tag": "button"},
+            ],
+        }
+        runner = FakeRunner(
+            {
+                "intent": {"choice": "control_page"},
+                "operation": {"choice": "click"},
+                "target": {"choice": "e3"},
+                "safe_to_run": {"noul": 0.06},
+                "fit": {"score": 3.0},
+            }
+        )
+        self.engine._router = runner
+        self.engine._status = "ready"
+        result = self.engine.decide({"prompt": "Open Gmail", "page": page})
+        self.assertEqual(result["backend"], "grounded")
+        self.assertEqual(result["action"], {"type": "click", "elementId": "e2", "text": "", "url": ""})
+        self.assertFalse(result["needsConfirmation"])
+        self.assertEqual(runner.calls, [])
+        again = self.engine.decide({"prompt": "gmail please", "page": page})
+        self.assertEqual(again["action"]["elementId"], "e2")
 
     def test_extractors(self):
         self.assertEqual(extract_typed_text('type "hi there" into Search'), "hi there")

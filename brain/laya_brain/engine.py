@@ -592,7 +592,7 @@ class Engine:
             if os.environ.get("LAYA_WARMUP", "0") == "1":
                 ask_runner(
                     runner,
-                    "warmup",
+                    "This is an English warmup.",
                     {"ok": {"type": "noul", "instructions": "Is this a warmup ping?"}},
                 )
             with self._lock:
@@ -614,6 +614,24 @@ class Engine:
         page = payload.get("page") if isinstance(payload.get("page"), Mapping) else None
         history = payload.get("history") if isinstance(payload.get("history"), list) else []
         confirmed = bool(payload.get("confirmed"))
+        named = _named_control(prompt, page)
+        if named is not None:
+            verb = _control_verb(named) or "click"
+            element_id = _safe_id(named)
+            grounded = project_decision(
+                prompt,
+                page,
+                {
+                    "intent": {"choice": "control_page"},
+                    "operation": {"choice": verb},
+                    "target": {"choice": element_id},
+                    "fit": {"score": 4.0},
+                },
+                confirmed=confirmed,
+                backend="grounded",
+            )
+            grounded["layaStatus"] = self.health()["laya"]
+            return grounded
         state = build_state(prompt, page, history)
         questions = build_questions(page)
         backend = "heuristic"
@@ -653,10 +671,32 @@ def build_runner() -> Any:
     import laya
 
     if hasattr(laya, "Router"):
-        return laya.Router()
+        # The 4GB GPU cannot keep the English and multilingual checkpoints resident together.
+        return laya.Router(max_loaded=1)
     if hasattr(laya, "load"):
         return laya.load("convaiinnovations/laya")
     raise RuntimeError("installed laya package has neither Router nor load")
+
+
+def _named_control(prompt: str, page: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
+    """The control whose name the user actually wrote, when that name is on the page."""
+    if "?" in prompt:
+        return None
+    prompt_lower = prompt.lower()
+    best: Mapping[str, Any] | None = None
+    best_score = 0
+    for element in _page_elements(page):
+        name = str(element.get("name") or "").strip()
+        if len(name) < 3 or name.lower() not in prompt_lower:
+            continue
+        verb = _control_verb(element)
+        if verb == "select" and not extract_option(prompt):
+            continue
+        score = sum(len(token) for token in _tokens(name))
+        if score > best_score and _safe_id(element):
+            best = element
+            best_score = score
+    return best
 
 
 def _wants_control(prompt: str) -> bool:
