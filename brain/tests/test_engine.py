@@ -93,6 +93,7 @@ class EngineTests(unittest.TestCase):
     def test_extractors(self):
         self.assertEqual(extract_typed_text('type "hi there" into Search'), "hi there")
         self.assertEqual(extract_url("go to https://example.com/a."), "https://example.com/a")
+        self.assertEqual(extract_url("go to google.com"), "https://google.com")
 
 
 if __name__ == "__main__":

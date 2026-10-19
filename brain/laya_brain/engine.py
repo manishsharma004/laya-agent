@@ -188,8 +188,13 @@ def extract_option(prompt: str) -> str:
 
 
 def extract_url(prompt: str) -> str:
-    match = re.search(r"https?://[^\s\"']+", prompt)
-    return match.group(0).rstrip(".,)") if match else ""
+    explicit = re.search(r"https?://[^\s\"']+", prompt)
+    if explicit:
+        return explicit.group(0).rstrip(".,)")
+    bare = re.search(r"\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?:/[^\s\"']*)?", prompt, flags=re.IGNORECASE)
+    if not bare:
+        return ""
+    return "https://" + bare.group(0).rstrip(".,)")
 
 
 def looks_destructive(prompt: str, element: Mapping[str, Any] | None) -> bool:

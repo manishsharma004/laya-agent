@@ -139,6 +139,37 @@ func TestCommandUISelectsWhichTabsAreAvailable(t *testing.T) {
 	}
 }
 
+func TestSnapshotKeepsOtherTabTranscripts(t *testing.T) {
+	server := testServer(t, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"reply":  "Click “Login”.",
+			"action": map[string]string{"type": "click", "elementId": "e1", "text": "", "url": ""},
+		})
+	})
+	status, payload := do(server, http.MethodPost, "/v1/extension/tabs", `{
+		"sessionId":"local","activeTabId":586191126,
+		"tabs":[{"tabId":586191126,"windowId":1,"url":"https://example.com","title":"Example","active":true,"elements":[{"id":"e1","name":"Login","role":"button","tag":"button"}]}]
+	}`)
+	if status != http.StatusOK {
+		t.Fatalf("tabs %d %s", status, payload)
+	}
+	status, payload = do(server, http.MethodPost, "/v1/chat", `{"sessionId":"local","tabId":586191126,"message":"click Login"}`)
+	if status != http.StatusOK || !strings.Contains(payload, "click Login") {
+		t.Fatalf("chat %d %s", status, payload)
+	}
+	status, _ = do(server, http.MethodPost, "/v1/extension/snapshot", `{"sessionId":"local","tabId":1,"url":"http://127.0.0.1:7505/demo","title":"Practice page","elements":[]}`)
+	if status != http.StatusOK {
+		t.Fatalf("snapshot %d", status)
+	}
+	view := server.store.ViewTab("local", 586191126)
+	if view.FocusTabID != 586191126 || len(view.Messages) < 2 || view.Messages[0].Content != "click Login" {
+		t.Fatalf("transcript wiped: %+v tabs %+v", view.Messages, view.Tabs)
+	}
+	if len(view.Tabs) != 2 {
+		t.Fatalf("tabs %+v", view.Tabs)
+	}
+}
+
 func TestTokenRequiredWhenConfigured(t *testing.T) {
 	server := testServer(t, func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})

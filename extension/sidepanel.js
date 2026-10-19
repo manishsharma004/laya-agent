@@ -27,15 +27,35 @@ async function activeTab() {
   return tab;
 }
 
+let renderedKey = "";
+
+function viewKey(sessionView, tab) {
+  const focus = (sessionView.tabs || []).find((item) => item.tabId === tab?.id);
+  const messages = (sessionView.messages || [])
+    .map((message) => [message.role, message.at, message.content].join("\u0000"))
+    .join("\n");
+  return JSON.stringify({
+    tabId: tab?.id || 0,
+    title: focus?.title || tab?.title || "",
+    url: focus?.url || "",
+    available: !focus || focus.available,
+    connected: Boolean(sessionView.extensionConnected),
+    held: sessionView.held?.type || "",
+    messages,
+  });
+}
+
 function render(sessionView, tab) {
+  const key = viewKey(sessionView, tab);
+  if (key === renderedKey) return;
+  renderedKey = key;
   const focus = (sessionView.tabs || []).find((item) => item.tabId === tab?.id);
   title.textContent = focus?.title || tab?.title || "No tab";
   urlLine.textContent = focus?.url || "";
   const available = !focus || focus.available;
   pill.textContent = available ? "live" : "off";
   pill.classList.toggle("on", available && sessionView.extensionConnected);
-  banner.hidden = available;
-  banner.textContent = available ? "" : "This tab is turned off in the command desk.";
+  const stick = log.scrollHeight - log.scrollTop - log.clientHeight < 24;
   log.replaceChildren();
   for (const message of sessionView.messages || []) {
     const article = document.createElement("article");
@@ -47,11 +67,19 @@ function render(sessionView, tab) {
     article.append(who, body);
     log.append(article);
   }
+  if (stick) log.scrollTop = log.scrollHeight;
   if (sessionView.held && available) {
     confirmButton.hidden = false;
     confirmButton.textContent = "Confirm " + sessionView.held.type;
   } else {
     confirmButton.hidden = true;
+  }
+  if (!available) {
+    banner.hidden = false;
+    banner.textContent = "This tab is turned off in the command desk.";
+  } else if (banner.textContent === "This tab is turned off in the command desk.") {
+    banner.hidden = true;
+    banner.textContent = "";
   }
 }
 
@@ -80,6 +108,10 @@ async function refresh() {
     );
     if (!response.ok) throw new Error("session " + response.status);
     render(await response.json(), tab);
+    if (banner.textContent.startsWith("session ")) {
+      banner.hidden = true;
+      banner.textContent = "";
+    }
   } catch (error) {
     banner.hidden = false;
     banner.textContent = String(error.message || error);
@@ -131,8 +163,16 @@ settings.addEventListener("submit", async (event) => {
   banner.textContent = "Saved.";
   refresh();
 });
-chrome.tabs.onActivated.addListener(() => refresh());
-chrome.tabs.onUpdated.addListener(() => refresh());
+let refreshTimer = 0;
+function scheduleRefresh() {
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(refresh, 200);
+}
+
+chrome.tabs.onActivated.addListener(() => scheduleRefresh());
+chrome.tabs.onUpdated.addListener((_id, info) => {
+  if (info.status === "complete" || info.url) scheduleRefresh();
+});
 loadSettings();
 refresh();
-setInterval(refresh, 1500);
+setInterval(refresh, 2000);

@@ -131,14 +131,26 @@ func (s *Store) get(id string) *session {
 }
 
 func (s *Store) SavePage(id string, page Page) {
+	if page.TabID == 0 {
+		return
+	}
 	elements := append([]Element(nil), page.Elements...)
-	s.SyncTabs(id, page.TabID, []TabReport{{
-		TabID:    page.TabID,
-		URL:      page.URL,
-		Title:    page.Title,
-		Active:   true,
-		Elements: &elements,
-	}})
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess := s.get(id)
+	tab, ok := sess.Tabs[page.TabID]
+	if !ok {
+		tab = &TabState{TabID: page.TabID, Available: true}
+		sess.Tabs[page.TabID] = tab
+	}
+	tab.URL = page.URL
+	tab.Title = page.Title
+	tab.Elements = elements
+	tab.ReportedAt = time.Now().UTC().Format(time.RFC3339)
+	if sess.ActiveTabID == 0 {
+		sess.ActiveTabID = page.TabID
+		tab.Active = true
+	}
 }
 
 func (s *Store) SyncTabs(id string, activeTabID int, reports []TabReport) []TabSummary {

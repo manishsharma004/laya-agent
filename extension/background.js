@@ -109,13 +109,39 @@ chrome.runtime.onInstalled.addListener(async () => {
 chrome.sidePanel?.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === "tick") tick();
+  if (alarm.name === "tick") scheduleTick();
 });
 
-chrome.tabs.onActivated.addListener(() => tick());
-chrome.tabs.onRemoved.addListener(() => tick());
+let tickTimer = 0;
+let tickRunning = false;
+let tickAgain = false;
+
+function scheduleTick() {
+  clearTimeout(tickTimer);
+  tickTimer = setTimeout(runTick, 300);
+}
+
+async function runTick() {
+  if (tickRunning) {
+    tickAgain = true;
+    return;
+  }
+  tickRunning = true;
+  try {
+    await tick();
+  } finally {
+    tickRunning = false;
+    if (tickAgain) {
+      tickAgain = false;
+      scheduleTick();
+    }
+  }
+}
+
+chrome.tabs.onActivated.addListener(() => scheduleTick());
+chrome.tabs.onRemoved.addListener(() => scheduleTick());
 chrome.tabs.onUpdated.addListener((_id, info) => {
-  if (info.status === "complete" || info.title || info.url) tick();
+  if (info.status === "complete" || info.url) scheduleTick();
 });
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === "tick") {
@@ -125,5 +151,5 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return false;
 });
 
-setInterval(tick, 1000);
-tick();
+setInterval(scheduleTick, 2000);
+scheduleTick();
