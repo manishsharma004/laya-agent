@@ -452,6 +452,15 @@ def project_decision(
             operation = "click"
             target = str(matched.get("id"))
             element = matched
+    if operation == "done" and page and _wants_control(prompt) and element is None:
+        matched_id = _best_element(prompt, list(elements.values()))
+        matched = elements.get(matched_id) if matched_id else None
+        if matched is not None:
+            operation = _control_verb(matched) or "click"
+            target = str(matched.get("id"))
+            element = matched
+        elif extract_url(prompt):
+            operation = "navigate"
 
     if not page and operation not in {"navigate", "done"}:
         reply = "The extension has not reported a page for this session yet. Open a tab and check the popup session id."

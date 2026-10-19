@@ -242,6 +242,27 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(result["action"], {"type": "click", "elementId": "e5", "text": "", "url": ""})
         self.assertIn("none", self.engine._router.calls[1][1]["target"]["criteria"])
 
+    def test_abstaining_on_a_named_link_still_clicks_it(self):
+        page = {
+            "elements": [
+                {"id": "e5", "role": "link", "name": "Gmail", "tag": "a", "href": "https://mail.google.com/"},
+                {"id": "e6", "role": "link", "name": "Images", "tag": "a"},
+            ]
+        }
+        self.engine._router = FakeRunner(
+            {
+                "intent": {"choice": "clarify"},
+                "operation": {"choice": "done"},
+                "target": {"choice": "none"},
+                "safe_to_run": {"noul": 0.9},
+                "fit": {"score": 2.0},
+            }
+        )
+        self.engine._status = "ready"
+        result = self.engine.decide({"prompt": "open gmail", "page": page})
+        self.assertEqual(result["action"]["type"], "click")
+        self.assertEqual(result["action"]["elementId"], "e5")
+
     def test_one_control_skips_the_second_pass(self):
         page = {"elements": [{"id": "e7", "role": "link", "name": "Only", "tag": "a"}]}
         runner = FakeRunner(
