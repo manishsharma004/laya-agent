@@ -1,4 +1,4 @@
-# Install after a CPU torch wheel. The brain still runs without these, using the
+# Install after the ROCm torch wheel. The brain still runs without these, using the
 # heuristic backend until `import laya` succeeds.
 laya==0.4.11
 transformers>=4.48.0

@@ -32,7 +32,7 @@ That listens on `0.0.0.0`. These ports sit in the 7500–7510 range; 7500–7503
 
 Load `extension/` as an unpacked extension. The toolbar icon opens the sidebar, which talks to the agent about the active tab. The command desk at port 7504 lists the tabs the extension can see; uncheck a tab and the extension stops acting on it. Match the sidebar session with the desk (`local` by default). If the browser is on another machine, set the sidebar API field to `http://<this-host>:7505`.
 
-The first start installs CPU PyTorch and `laya` into `brain/.venv` and downloads a checkpoint when `LAYA_WARMUP=1`. Until that finishes, decisions use the heuristic and `backend` is `heuristic`. After the checkpoint is ready, `backend` is `laya`.
+The first start installs uv (if it is missing), Python 3.12, ROCm PyTorch (`2.14.0+rocm10.1.0`), and `laya` into `brain/.venv`, then downloads a checkpoint when `LAYA_WARMUP=1`. Until that finishes, decisions use the heuristic and `backend` is `heuristic`. After the checkpoint is ready, `backend` is `laya`. Pass `ROCM_TORCH_EXTRA=device-gfx1100` (or another `device-gfx*` extra) when creating the venv if that GPU should receive kernels.
 
 `API_TOKEN` on the gateway requires the same value in the command desk Session panel and the sidebar connection form (`X-Api-Token`).
 

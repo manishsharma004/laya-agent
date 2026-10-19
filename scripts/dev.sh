@@ -13,21 +13,39 @@ if ! command -v go >/dev/null 2>&1; then
   export PATH="$ROOT/.tools/go/bin:$PATH"
 fi
 
-PY="$ROOT/brain/.venv/bin/python"
-if [[ ! -x "$PY" ]]; then
-  if ! python3 -m venv "$ROOT/brain/.venv"; then
-    python3 -m venv --without-pip "$ROOT/brain/.venv"
-    curl -fsSL https://bootstrap.pypa.io/get-pip.py | "$PY"
+UV="${UV:-}"
+if [[ -z "$UV" ]]; then
+  if command -v uv >/dev/null 2>&1; then
+    UV="$(command -v uv)"
+  elif [[ -x "$ROOT/.tools/uv" ]]; then
+    UV="$ROOT/.tools/uv"
+  else
+    echo "Installing uv into .tools"
+    curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="$ROOT/.tools" sh
+    UV="$ROOT/.tools/uv"
   fi
 fi
-if ! "$PY" -c "import laya" >/dev/null 2>&1; then
-  echo "Installing CPU torch and laya into brain/.venv"
-  "$ROOT/brain/.venv/bin/pip" install -U pip
-  # --no-deps keeps pip from replacing the CPU torch wheel with a CUDA build.
-  if "$ROOT/brain/.venv/bin/pip" install "torch>=2.2" --index-url https://download.pytorch.org/whl/cpu \
-    && "$ROOT/brain/.venv/bin/pip" install "transformers>=4.48" "safetensors>=0.4" "huggingface_hub>=0.20" "numpy>=1.20" \
-    && "$ROOT/brain/.venv/bin/pip" install -r "$ROOT/brain/requirements-laya.txt" --no-deps; then
-    echo "Laya is installed. The first decision downloads a checkpoint."
+
+PY="$ROOT/brain/.venv/bin/python"
+if [[ ! -x "$PY" ]]; then
+  "$UV" python install 3.12
+  "$UV" venv "$ROOT/brain/.venv" --python 3.12
+fi
+# ROCm wheels live on AMD's index. A device extra (device-gfx1100, device-all, ...)
+# is optional: the +rocm build already runs Laya on CPU, and this machine may have no GPU.
+ROCM_INDEX="${ROCM_INDEX:-https://stable.repo.amd.com/rocm/whl-next/}"
+ROCM_TORCH_SPEC="${ROCM_TORCH_SPEC:-torch==2.14.0+rocm10.1.0}"
+if [[ -n "${ROCM_TORCH_EXTRA:-}" ]]; then
+  ROCM_TORCH_SPEC="torch[${ROCM_TORCH_EXTRA}]==2.14.0+rocm10.1.0"
+fi
+if ! "$PY" -c "import torch; raise SystemExit(0 if 'rocm' in torch.__version__ else 1)" >/dev/null 2>&1 \
+  || ! "$PY" -c "import laya" >/dev/null 2>&1; then
+  echo "Installing ROCm torch and laya into brain/.venv"
+  # --no-deps on laya keeps a later PyPI solve from replacing the ROCm wheel.
+  if "$UV" pip install --python "$PY" --index-url "$ROCM_INDEX" "$ROCM_TORCH_SPEC" \
+    && "$UV" pip install --python "$PY" "transformers>=4.48" "safetensors>=0.4" "huggingface_hub>=0.20" "numpy>=1.20" \
+    && "$UV" pip install --python "$PY" -r "$ROOT/brain/requirements-laya.txt" --no-deps; then
+    echo "Laya is installed on the ROCm torch build. The first decision downloads a checkpoint."
   else
     echo "Laya did not install. The brain will answer with the heuristic backend."
   fi
