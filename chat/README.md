@@ -9,4 +9,4 @@ npm install
 npm run dev
 ```
 
-The dev server binds to `0.0.0.0:7504`. The API address defaults to `http://<this-host>:7505` and can be changed from Session. Keep the session id aligned with the extension popup (`local` unless you change both).
+The dev server binds to `0.0.0.0:7504`. The API address defaults to `http://<this-host>:7505` and can be changed from Session. Keep the session id aligned with the extension sidebar (`local` unless you change both).
