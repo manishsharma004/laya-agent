@@ -55,12 +55,16 @@ function render(sessionView, tab) {
   }
 }
 
-async function refresh() {
+async function loadSettings() {
   const config = await cfg();
-  const tab = await activeTab();
   api.value = config.apiBase;
   session.value = config.sessionId;
   token.value = config.token;
+}
+
+async function refresh() {
+  const config = await cfg();
+  const tab = await activeTab();
   if (!tab?.id) {
     title.textContent = "No tab";
     return;
@@ -123,10 +127,12 @@ settings.addEventListener("submit", async (event) => {
     token: token.value,
   });
   chrome.runtime.sendMessage({ type: "tick" });
-  settings.hidden = true;
+  banner.hidden = false;
+  banner.textContent = "Saved.";
   refresh();
 });
 chrome.tabs.onActivated.addListener(() => refresh());
 chrome.tabs.onUpdated.addListener(() => refresh());
+loadSettings();
 refresh();
 setInterval(refresh, 1500);
