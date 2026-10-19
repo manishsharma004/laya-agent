@@ -111,11 +111,11 @@ def build_questions(page: Mapping[str, Any] | None) -> dict[str, Any]:
             "type": "choice",
             "instructions": "Which single page operation best fulfills the request? Use done when the page should stay as it is.",
             "criteria": {
-                "click": "activate a button, link, or other control",
+                "click": "activate a control already on this page, including a link such as Gmail",
                 "type": "enter text into an editable field",
                 "select": "choose an option in a dropdown",
                 "scroll": "scroll the page or bring an element into view",
-                "navigate": "open a different http or https address",
+                "navigate": "leave this page only when the user typed an http(s) address that is not already a control here",
                 "extract": "read text from an element without changing the page",
                 "done": "do not change the page",
             },
@@ -148,15 +148,31 @@ def _best_element(prompt: str, elements: list[Mapping[str, Any]]) -> str | None:
     best_score = 0
     for element in elements:
         name = str(element.get("name") or "")
-        haystack = f"{name} {element.get('role') or ''} {element.get('tag') or ''}"
+        href = str(element.get("href") or "")
+        haystack = f"{name} {element.get('role') or ''} {element.get('tag') or ''} {href}"
         score = len(wanted & _tokens(haystack)) * 2
         lowered = name.lower().strip()
         if lowered and lowered in prompt_lower:
             score += 3
+        score += _href_score(prompt_lower, href)
         if score > best_score:
             best_score = score
             best_id = str(element.get("id"))
     return best_id
+
+
+def _href_score(prompt_lower: str, href: str) -> int:
+    if not href:
+        return 0
+    lowered = href.lower()
+    explicit = extract_url(prompt_lower)
+    if explicit and (explicit in lowered or lowered in explicit):
+        return 8
+    host = re.sub(r"^https?://", "", lowered).split("/")[0]
+    labels = [part for part in host.split(".") if part and part not in {"www", "com", "org", "net", "html"}]
+    if any(label in prompt_lower for label in labels):
+        return 4
+    return 0
 
 
 def _quoted(prompt: str) -> str:
@@ -239,8 +255,10 @@ def heuristic_predict(state: str, questions: Mapping[str, Any]) -> dict[str, Any
         operation = "select"
     elif "scroll" in lowered:
         operation = "scroll"
+    elif re.search(r"\b(open|visit|launch)\b", lowered) or re.search(r"\bgo to\b", lowered):
+        operation = "click" if _best_element(prompt, elements) else ("navigate" if extract_url(prompt) else "click")
     elif extract_url(prompt):
-        operation = "navigate"
+        operation = "click" if _best_element(prompt, elements) else "navigate"
     elif re.search(r"\b(read|extract|copy)\b", lowered):
         operation = "extract"
     elif re.search(r"\b(what|who|why|how|status|help)\b", lowered) or "?" in prompt:
@@ -316,6 +334,14 @@ def project_decision(
     confidence = _confidence(_score(answers, "fit"))
     action = None
     reply = ""
+    # A named control on the page is a click, even when the model answers "navigate".
+    if page and operation == "navigate":
+        matched_id = _best_element(prompt, list(elements.values())) or (target if element is not None else None)
+        matched = elements.get(matched_id) if matched_id else None
+        if matched is not None:
+            operation = "click"
+            target = str(matched.get("id"))
+            element = matched
 
     if not page and operation not in {"navigate", "done"}:
         reply = "The extension has not reported a page for this session yet. Open a tab and check the popup session id."
@@ -328,7 +354,7 @@ def project_decision(
         if url:
             action = {"type": "navigate", "elementId": "", "text": "", "url": url}
         else:
-            reply = "Include the http(s) address you want opened."
+            reply = "I don't see that control on this page."
     elif operation == "scroll" and element is None:
         action = {"type": "scroll", "elementId": "", "text": "", "url": ""}
     elif element is None:

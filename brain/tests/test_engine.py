@@ -60,6 +60,37 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(result["action"]["type"], "navigate")
         self.assertEqual(result["action"]["url"], "https://example.com/docs")
 
+    def test_open_named_control_clicks_it(self):
+        page = {
+            **PAGE,
+            "elements": PAGE["elements"]
+            + [{"id": "e5", "role": "link", "name": "Gmail", "tag": "a", "href": "https://mail.google.com/mail/", "editable": False}],
+        }
+        result = self.engine.decide({"prompt": "open gmail", "page": page})
+        self.assertEqual(result["action"]["type"], "click")
+        self.assertEqual(result["action"]["elementId"], "e5")
+
+    def test_laya_navigate_answer_still_clicks_a_matching_control(self):
+        page = {
+            **PAGE,
+            "elements": PAGE["elements"]
+            + [{"id": "e5", "role": "link", "name": "Gmail", "tag": "a", "href": "https://mail.google.com/mail/", "editable": False}],
+        }
+        self.engine._router = FakeRunner(
+            {
+                "intent": {"choice": "control_page"},
+                "operation": {"choice": "navigate"},
+                "target": {"choice": "none"},
+                "safe_to_run": {"noul": 0.9},
+                "fit": {"score": 3.2},
+            }
+        )
+        self.engine._status = "ready"
+        result = self.engine.decide({"prompt": "open gmail", "page": page})
+        self.assertEqual(result["backend"], "laya")
+        self.assertEqual(result["action"]["type"], "click")
+        self.assertEqual(result["action"]["elementId"], "e5")
+
     def test_missing_page_does_not_invent_a_click(self):
         result = self.engine.decide({"prompt": "click Login"})
         self.assertIsNone(result["action"])

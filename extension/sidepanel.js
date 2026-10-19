@@ -118,29 +118,44 @@ function connectSidebar() {
   activeTab().then(watchTab);
 }
 
+let sending = false;
+
 async function send(confirmed) {
+  if (sending) return;
   const config = await cfg();
   const tab = await activeTab();
   const message = draft.value.trim();
   if (!tab?.id || (!confirmed && !message)) return;
-  const response = await fetch(config.apiBase.replace(/\/$/, "") + "/v1/chat", {
-    method: "POST",
-    headers: headers(config),
-    body: JSON.stringify({
-      sessionId: config.sessionId,
-      tabId: tab.id,
-      message: confirmed ? "" : message,
-      confirmed,
-    }),
-  });
-  const body = await response.json();
-  if (!response.ok) {
+  sending = true;
+  draft.value = "";
+  draft.disabled = true;
+  try {
+    const response = await fetch(config.apiBase.replace(/\/$/, "") + "/v1/chat", {
+      method: "POST",
+      headers: headers(config),
+      body: JSON.stringify({
+        sessionId: config.sessionId,
+        tabId: tab.id,
+        message: confirmed ? "" : message,
+        confirmed,
+      }),
+    });
+    const body = await response.json();
+    if (!response.ok) {
+      if (!confirmed) draft.value = message;
+      banner.hidden = false;
+      banner.textContent = body.error || "The agent did not accept that.";
+      return;
+    }
+    render(body.session, tab);
+  } catch (error) {
+    if (!confirmed) draft.value = message;
     banner.hidden = false;
-    banner.textContent = body.error || "The agent did not accept that.";
-    return;
+    banner.textContent = String(error.message || error);
+  } finally {
+    sending = false;
+    draft.disabled = false;
   }
-  if (!confirmed) draft.value = "";
-  render(body.session, tab);
 }
 
 document.getElementById("composer").addEventListener("submit", (event) => {
