@@ -43,4 +43,4 @@ The first start installs uv (if it is missing), Python 3.12, ROCm PyTorch (`2.14
 ./scripts/smoke.sh   # servers already running
 ```
 
-The wire format is in `docs/protocol.md`.
+The wire format is in `docs/protocol.md`. How the four programs cooperate, including the decision passes, is in `specs/architecture/`.
