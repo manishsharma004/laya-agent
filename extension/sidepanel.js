@@ -90,32 +90,32 @@ async function loadSettings() {
   token.value = config.token;
 }
 
-async function refresh() {
-  const config = await cfg();
-  const tab = await activeTab();
-  if (!tab?.id) {
-    title.textContent = "No tab";
-    return;
-  }
-  try {
-    const response = await fetch(
-      config.apiBase.replace(/\/$/, "") +
-        "/v1/sessions/" +
-        encodeURIComponent(config.sessionId) +
-        "?tabId=" +
-        tab.id,
-      { headers: headers(config) },
-    );
-    if (!response.ok) throw new Error("session " + response.status);
-    render(await response.json(), tab);
+let sidebarPort = null;
+
+function watchTab(tab) {
+  if (sidebarPort && tab?.id) sidebarPort.postMessage({ type: "watch", tabId: tab.id });
+}
+
+function connectSidebar() {
+  if (sidebarPort) return;
+  const port = chrome.runtime.connect({ name: "sidebar" });
+  sidebarPort = port;
+  port.onMessage.addListener(async (message) => {
+    if (message?.type !== "session") return;
+    const tab = await activeTab();
+    const focus = message.session?.focusTabId;
+    if (focus && tab?.id && focus !== tab.id) return;
+    render(message.session, tab);
     if (banner.textContent.startsWith("session ")) {
       banner.hidden = true;
       banner.textContent = "";
     }
-  } catch (error) {
-    banner.hidden = false;
-    banner.textContent = String(error.message || error);
-  }
+  });
+  port.onDisconnect.addListener(() => {
+    if (sidebarPort === port) sidebarPort = null;
+    setTimeout(connectSidebar, 300);
+  });
+  activeTab().then(watchTab);
 }
 
 async function send(confirmed) {
@@ -161,18 +161,11 @@ settings.addEventListener("submit", async (event) => {
   chrome.runtime.sendMessage({ type: "tick" });
   banner.hidden = false;
   banner.textContent = "Saved.";
-  refresh();
+  const previous = sidebarPort;
+  sidebarPort = null;
+  previous?.disconnect();
+  connectSidebar();
 });
-let refreshTimer = 0;
-function scheduleRefresh() {
-  clearTimeout(refreshTimer);
-  refreshTimer = setTimeout(refresh, 200);
-}
-
-chrome.tabs.onActivated.addListener(() => scheduleRefresh());
-chrome.tabs.onUpdated.addListener((_id, info) => {
-  if (info.status === "complete" || info.url) scheduleRefresh();
-});
+chrome.tabs.onActivated.addListener(() => activeTab().then(watchTab));
 loadSettings();
-refresh();
-setInterval(refresh, 2000);
+connectSidebar();

@@ -1,3 +1,12 @@
+let pageTimer = 0;
+const observer = new MutationObserver(() => {
+  clearTimeout(pageTimer);
+  pageTimer = setTimeout(() => {
+    chrome.runtime.sendMessage({ type: "page" }).catch(() => {});
+  }, 800);
+});
+observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === "snapshot") {
     sendResponse({

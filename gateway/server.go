@@ -21,6 +21,7 @@ var allowedActions = map[string]bool{
 
 type Server struct {
 	store    *Store
+	hub      *Hub
 	agentURL string
 	token    string
 	client   *http.Client
@@ -37,6 +38,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /v1/extension/result", s.handleResult)
 	mux.HandleFunc("POST /v1/chat", s.handleChat)
 	mux.HandleFunc("GET /v1/sessions/{id}", s.handleSession)
+	mux.HandleFunc("GET /v1/ws", s.handleWS)
 	mux.HandleFunc("GET /demo", s.handleDemo)
 	mux.HandleFunc("GET /", s.handleRoot)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -67,6 +69,9 @@ func (s *Server) authorized(r *http.Request) bool {
 	if s.token == "" || r.URL.Path == "/health" || r.URL.Path == "/demo" {
 		return true
 	}
+	if r.URL.Path == "/v1/ws" && r.URL.Query().Get("token") == s.token {
+		return true
+	}
 	return r.Header.Get("X-Api-Token") == s.token
 }
 
@@ -74,7 +79,7 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"service": "laya-gateway",
 		"demo":    "/demo",
-		"routes":  []string{"/health", "/v1/status", "/v1/chat", "/v1/sessions/{id}", "/v1/extension/tabs", "/v1/tabs/availability", "/v1/extension/commands", "/v1/extension/result"},
+		"routes":  []string{"/health", "/v1/status", "/v1/ws", "/v1/chat", "/v1/sessions/{id}", "/v1/extension/tabs", "/v1/tabs/availability", "/v1/extension/commands", "/v1/extension/result"},
 	})
 }
 
@@ -126,6 +131,7 @@ func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		body.Elements = body.Elements[:40]
 	}
 	s.store.SavePage(id, Page{URL: body.URL, Title: body.Title, Elements: body.Elements, TabID: body.TabID})
+	s.publishSession(id)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "elements": len(body.Elements), "session": s.store.View(id)})
 }
 
@@ -166,6 +172,8 @@ func (s *Server) handleTabs(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	tabs := s.store.SyncTabs(id, body.ActiveTabID, reports)
+	s.publishSession(id)
+	s.pushCommands(id)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "activeTabId": body.ActiveTabID, "tabs": tabs})
 }
 
@@ -187,6 +195,7 @@ func (s *Server) handleAvailability(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown tab"})
 		return
 	}
+	s.publishSession(id)
 	writeJSON(w, http.StatusOK, s.store.ViewTab(id, body.TabID))
 }
 
@@ -219,6 +228,7 @@ func (s *Server) handleResult(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown command"})
 		return
 	}
+	s.publishSession(id)
 	writeJSON(w, http.StatusOK, command)
 }
 
@@ -258,6 +268,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.store.Append(id, command.TabID, "assistant", "Confirmed. Running "+command.Type+".", "", false)
+		s.publishSession(id)
+		s.pushCommands(id)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"reply":             "Confirmed. Running " + command.Type + ".",
 			"needsConfirmation": false,
@@ -300,6 +312,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.store.Append(id, tabID, "assistant", reply, backend, needsConfirmation)
+	s.publishSession(id)
+	s.pushCommands(id)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"reply":             reply,
 		"backend":           backend,

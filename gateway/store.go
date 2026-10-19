@@ -306,6 +306,23 @@ func (s *Store) ReleaseHeld(id string, tabID int) (*Command, bool) {
 	return command, true
 }
 
+func (s *Store) PeekQueued(id string) []Command {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, ok := s.sessions[id]
+	if !ok {
+		return []Command{}
+	}
+	out := []Command{}
+	for _, command := range sess.Commands {
+		tab := sess.Tabs[command.TabID]
+		if command.Status == "queued" && tab != nil && tab.Available {
+			out = append(out, *command)
+		}
+	}
+	return out
+}
+
 func (s *Store) TakeQueued(id string) []Command {
 	s.mu.Lock()
 	defer s.mu.Unlock()

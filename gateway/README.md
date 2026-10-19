@@ -10,4 +10,6 @@ LISTEN=0.0.0.0:7505 AGENT_URL=http://127.0.0.1:7506 go run .
 
 `GET /demo` is a practice page with a search box, a color menu, Login, and Delete account.
 
+`GET /v1/ws?sessionId=local&role=extension|ui` is the live channel. The extension pushes its tab inventory on that socket and receives queued commands. The sidebar and command desk receive the session view instead of polling. A browser client passes `token` on the query string because a WebSocket cannot set `X-Api-Token`.
+
 Set `API_TOKEN` to require the `X-Api-Token` header on every route except `/health` and `/demo`.

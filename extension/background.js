@@ -6,15 +6,37 @@ const DEFAULTS = {
   availableTabIds: null,
 };
 
+const ports = new Set();
+let socket = null;
+let socketKey = "";
+let retryMs = 1000;
+let retryTimer = 0;
+let publishTimer = 0;
+let publishing = false;
+let publishAgain = false;
+let latestSession = null;
+
 async function config() {
   const stored = await chrome.storage.local.get(DEFAULTS);
   return { ...DEFAULTS, ...stored };
 }
 
-function headers(cfg) {
-  const result = { "content-type": "application/json" };
-  if (cfg.token) result["X-Api-Token"] = cfg.token;
-  return result;
+function tabUrl(tab) {
+  return tab?.url || tab?.pendingUrl || "";
+}
+
+function socketURL(cfg) {
+  const base = cfg.apiBase.replace(/\/$/, "").replace(/^http/, "ws");
+  const query = new URLSearchParams({ sessionId: cfg.sessionId || "local", role: "extension" });
+  if (cfg.token) query.set("token", cfg.token);
+  return base + "/v1/ws?" + query.toString();
+}
+
+function postSession(session) {
+  latestSession = session;
+  for (const port of ports) {
+    port.postMessage({ type: "session", session });
+  }
 }
 
 async function remember(patch) {
@@ -22,13 +44,8 @@ async function remember(patch) {
   await chrome.storage.local.set({ status: { ...current.status, ...patch, at: new Date().toISOString() } });
 }
 
-function tabUrl(tab) {
-  return tab?.url || tab?.pendingUrl || "";
-}
-
-async function tick() {
+async function collectTabs() {
   const cfg = await config();
-  if (!cfg.enabled) return;
   const tabs = await chrome.tabs.query({});
   const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   const known = cfg.availableTabIds;
@@ -55,101 +72,158 @@ async function tick() {
       elements,
     });
   }
-  const base = cfg.apiBase.replace(/\/$/, "");
-  try {
-    const posted = await fetch(base + "/v1/extension/tabs", {
-      method: "POST",
-      headers: headers(cfg),
-      body: JSON.stringify({ sessionId: cfg.sessionId, activeTabId: active?.id || 0, tabs: reports }),
-    });
-    if (!posted.ok) throw new Error("tabs " + posted.status);
-    const inventory = await posted.json();
-    const availableTabIds = (inventory.tabs || []).filter((tab) => tab.available).map((tab) => tab.tabId);
-    await chrome.storage.local.set({ availableTabIds });
-    const commandsResponse = await fetch(
-      base + "/v1/extension/commands?sessionId=" + encodeURIComponent(cfg.sessionId),
-      { headers: headers(cfg) },
-    );
-    if (!commandsResponse.ok) throw new Error("commands " + commandsResponse.status);
-    const { commands } = await commandsResponse.json();
-    let last = active ? "Watching " + (active.title || tabUrl(active)) : "No active tab.";
-    for (const command of commands || []) {
-      const result = await chrome.tabs.sendMessage(command.tabId, { type: "execute", command });
-      await fetch(base + "/v1/extension/result", {
-        method: "POST",
-        headers: headers(cfg),
-        body: JSON.stringify({
-          sessionId: cfg.sessionId,
-          commandId: command.id,
-          ok: Boolean(result?.ok),
-          detail: result?.detail || "No detail.",
-        }),
-      });
-      if (!active || command.tabId === active.id) last = result?.detail || last;
-    }
-    const activeReport = reports.find((tab) => tab.tabId === active?.id);
-    await remember({
-      connected: Boolean(activeReport),
-      detail: activeReport ? last : "The active tab is not an http(s) page.",
-      elements: activeReport?.elements?.length || 0,
-      activeTabId: active?.id || 0,
-    });
-  } catch (error) {
-    await remember({ connected: false, detail: String(error.message || error) });
+  return { cfg, active, reports };
+}
+
+function send(message) {
+  if (socket?.readyState !== WebSocket.OPEN) return false;
+  socket.send(JSON.stringify(message));
+  return true;
+}
+
+async function publishTabs() {
+  const { cfg, active, reports } = await collectTabs();
+  if (!cfg.enabled) return;
+  const sent = send({ type: "tabs", activeTabId: active?.id || 0, tabs: reports });
+  const activeReport = reports.find((tab) => tab.tabId === active?.id);
+  await remember({
+    connected: sent && Boolean(activeReport),
+    detail: sent
+      ? activeReport
+        ? "Watching " + (active.title || tabUrl(active))
+        : "The active tab is not an http(s) page."
+      : "Reconnecting to the gateway.",
+    elements: activeReport?.elements?.length || 0,
+    activeTabId: active?.id || 0,
+  });
+}
+
+function schedulePublish() {
+  clearTimeout(publishTimer);
+  publishTimer = setTimeout(runPublish, 300);
+}
+
+async function runPublish() {
+  if (publishing) {
+    publishAgain = true;
+    return;
   }
+  publishing = true;
+  try {
+    await publishTabs();
+  } finally {
+    publishing = false;
+    if (publishAgain) {
+      publishAgain = false;
+      schedulePublish();
+    }
+  }
+}
+
+async function executeCommands(commands) {
+  const [active] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+  for (const command of commands || []) {
+    let result = { ok: false, detail: "The tab did not accept the command." };
+    try {
+      result = (await chrome.tabs.sendMessage(command.tabId, { type: "execute", command })) || result;
+    } catch (error) {
+      result = { ok: false, detail: String(error.message || error) };
+    }
+    send({
+      type: "result",
+      commandId: command.id,
+      ok: Boolean(result.ok),
+      detail: result.detail || "No detail.",
+    });
+    if (!active || command.tabId === active.id) {
+      await remember({ connected: true, detail: result.detail || "Ran " + command.type + "." });
+    }
+  }
+}
+
+async function ensureSocket() {
+  const cfg = await config();
+  if (!cfg.enabled) return;
+  const nextKey = socketURL(cfg);
+  if (socket && socketKey === nextKey && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) {
+    return;
+  }
+  socketKey = nextKey;
+  if (socket) socket.close();
+  const opened = new WebSocket(nextKey);
+  socket = opened;
+  opened.onopen = () => {
+    retryMs = 1000;
+    schedulePublish();
+  };
+  opened.onmessage = (event) => {
+    let msg;
+    try {
+      msg = JSON.parse(event.data);
+    } catch {
+      return;
+    }
+    if (msg.type === "session") {
+      postSession(msg.session);
+      const availableTabIds = (msg.session?.tabs || []).filter((tab) => tab.available).map((tab) => tab.tabId);
+      chrome.storage.local.set({ availableTabIds });
+    }
+    if (msg.type === "commands") executeCommands(msg.commands);
+  };
+  opened.onclose = () => {
+    if (socket !== opened) return;
+    socket = null;
+    clearTimeout(retryTimer);
+    retryTimer = setTimeout(ensureSocket, retryMs);
+    retryMs = Math.min(retryMs * 2, 15000);
+  };
 }
 
 chrome.runtime.onInstalled.addListener(async () => {
   const stored = await chrome.storage.local.get(null);
   await chrome.storage.local.set({ ...DEFAULTS, ...stored, availableTabIds: stored.availableTabIds ?? null });
-  chrome.alarms.create("tick", { periodInMinutes: 0.5 });
+  chrome.alarms.clear("tick");
+  chrome.alarms.create("socket", { periodInMinutes: 1 });
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
 });
 
 chrome.sidePanel?.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+chrome.alarms.clear("tick");
+chrome.alarms.create("socket", { periodInMinutes: 1 });
 
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === "tick") scheduleTick();
+  if (alarm.name === "socket" || alarm.name === "tick") ensureSocket();
 });
 
-let tickTimer = 0;
-let tickRunning = false;
-let tickAgain = false;
-
-function scheduleTick() {
-  clearTimeout(tickTimer);
-  tickTimer = setTimeout(runTick, 300);
-}
-
-async function runTick() {
-  if (tickRunning) {
-    tickAgain = true;
-    return;
-  }
-  tickRunning = true;
-  try {
-    await tick();
-  } finally {
-    tickRunning = false;
-    if (tickAgain) {
-      tickAgain = false;
-      scheduleTick();
-    }
-  }
-}
-
-chrome.tabs.onActivated.addListener(() => scheduleTick());
-chrome.tabs.onRemoved.addListener(() => scheduleTick());
+chrome.tabs.onActivated.addListener(() => schedulePublish());
+chrome.tabs.onRemoved.addListener(() => schedulePublish());
 chrome.tabs.onUpdated.addListener((_id, info) => {
-  if (info.status === "complete" || info.url) scheduleTick();
+  if (info.status === "complete" || info.url) schedulePublish();
 });
+
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "sidebar") return;
+  ports.add(port);
+  port.onDisconnect.addListener(() => ports.delete(port));
+  if (latestSession) port.postMessage({ type: "session", session: latestSession });
+  port.onMessage.addListener((message) => {
+    if (message?.type === "watch") send({ type: "watch", tabId: message.tabId || 0 });
+    if (message?.type === "sync") schedulePublish();
+  });
+});
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.type === "page") {
+    schedulePublish();
+    sendResponse({ ok: true });
+    return false;
+  }
   if (message?.type === "tick") {
-    tick().then(() => sendResponse({ ok: true }));
+    socketKey = "";
+    ensureSocket().then(() => sendResponse({ ok: true }));
     return true;
   }
   return false;
 });
 
-setInterval(scheduleTick, 2000);
-scheduleTick();
+ensureSocket();

@@ -46,7 +46,7 @@
   function choose(tabId) {
     selectedTabId = tabId;
     localStorage.setItem("laya.tab", String(tabId));
-    refresh();
+    if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ type: "watch", tabId }));
   }
 
   async function setAvailable(tab, available) {
@@ -71,6 +71,7 @@
     sessionId = sessionId.trim() || "local";
     settingsOpen = false;
     refresh();
+    connectSocket();
   }
 
   async function send(confirmed = false) {
@@ -115,10 +116,40 @@
   $: laya = agent.laya || "offline";
   $: canSend = Boolean(selected?.available);
 
+  let socket;
+  let reconnectTimer;
+
+  function connectSocket() {
+    if (socket) socket.close();
+    const query = new URLSearchParams({ sessionId: sessionId || "local", role: "ui" });
+    if (selectedTabId) query.set("tabId", String(selectedTabId));
+    if (token.trim()) query.set("token", token.trim());
+    const next = new WebSocket(`${base().replace(/^http/, "ws")}/v1/ws?${query}`);
+    socket = next;
+    next.onmessage = (event) => {
+      const msg = JSON.parse(event.data);
+      if (msg.type !== "session" || !msg.session) return;
+      session = msg.session;
+      if (!selectedTabId && session.activeTabId) selectedTabId = session.activeTabId;
+      error = "";
+    };
+    next.onopen = () => {
+      error = "";
+    };
+    next.onclose = () => {
+      if (socket !== next) return;
+      error = `Reconnecting to ${base()}.`;
+      reconnectTimer = setTimeout(connectSocket, 1000);
+    };
+  }
+
   onMount(() => {
     refresh();
-    const timer = setInterval(refresh, 1500);
-    return () => clearInterval(timer);
+    connectSocket();
+    return () => {
+      clearTimeout(reconnectTimer);
+      if (socket) socket.close();
+    };
   });
 </script>
 

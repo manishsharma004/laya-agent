@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 func testServer(t *testing.T, agent http.HandlerFunc) *Server {
@@ -16,6 +18,7 @@ func testServer(t *testing.T, agent http.HandlerFunc) *Server {
 	t.Cleanup(backend.Close)
 	return &Server{
 		store:    NewStore(),
+		hub:      NewHub(),
 		agentURL: backend.URL,
 		client:   &http.Client{Timeout: 5 * time.Second},
 	}
@@ -186,6 +189,59 @@ func TestTokenRequiredWhenConfigured(t *testing.T) {
 	server.routes().ServeHTTP(res, req)
 	if res.Code != http.StatusOK {
 		t.Fatalf("authed status %d", res.Code)
+	}
+}
+
+func TestWebsocketPushesSessionAndCommands(t *testing.T) {
+	server := testServer(t, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"reply":  "Click “Login”.",
+			"action": map[string]string{"type": "click", "elementId": "e1", "text": "", "url": ""},
+		})
+	})
+	httpServer := httptest.NewServer(server.routes())
+	t.Cleanup(httpServer.Close)
+	wsURL := "ws" + strings.TrimPrefix(httpServer.URL, "http") + "/v1/ws?sessionId=local&role=extension"
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	var opened map[string]any
+	if err := conn.ReadJSON(&opened); err != nil || opened["type"] != "session" {
+		t.Fatalf("open %#v %v", opened, err)
+	}
+	status, payload := do(server, http.MethodPost, "/v1/extension/tabs", `{
+		"sessionId":"local","activeTabId":9,
+		"tabs":[{"tabId":9,"url":"https://example.com","title":"Example","active":true,"elements":[{"id":"e1","name":"Login","role":"button","tag":"button"}]}]
+	}`)
+	if status != http.StatusOK {
+		t.Fatal(status, payload)
+	}
+	var pushed map[string]any
+	if err := conn.ReadJSON(&pushed); err != nil || pushed["type"] != "session" {
+		t.Fatalf("tabs push %#v %v", pushed, err)
+	}
+	status, payload = do(server, http.MethodPost, "/v1/chat", `{"sessionId":"local","tabId":9,"message":"click Login"}`)
+	if status != http.StatusOK {
+		t.Fatal(status, payload)
+	}
+	sawCommand := false
+	for i := 0; i < 3 && !sawCommand; i++ {
+		var msg struct {
+			Type     string    `json:"type"`
+			Commands []Command `json:"commands"`
+		}
+		if err := conn.ReadJSON(&msg); err != nil {
+			t.Fatal(err)
+		}
+		if msg.Type == "commands" && len(msg.Commands) == 1 && msg.Commands[0].Type == "click" {
+			sawCommand = true
+		}
+	}
+	if !sawCommand {
+		t.Fatal("command was not pushed")
 	}
 }
 
