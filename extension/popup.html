@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Laya</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <strong>Laya</strong>
+      <span id="pill">checking</span>
+    </header>
+    <p id="detail">Waiting for the active tab.</p>
+    <label>API <input id="api" type="url" spellcheck="false" /></label>
+    <label>Session <input id="session" type="text" maxlength="64" spellcheck="false" /></label>
+    <label>Token <input id="token" type="password" placeholder="only if API_TOKEN is set" /></label>
+    <label class="check"><input id="enabled" type="checkbox" /> Control the active tab</label>
+    <button id="save" type="button">Save</button>
+  </body>
+  <script src="popup.js"></script>
+</html>

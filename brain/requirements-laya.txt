@@ -1,0 +1,7 @@
+# Install after a CPU torch wheel. The brain still runs without these, using the
+# heuristic backend until `import laya` succeeds.
+laya==0.4.11
+transformers>=4.48.0
+safetensors>=0.4.0
+huggingface_hub>=0.20.0
+numpy>=1.20.0

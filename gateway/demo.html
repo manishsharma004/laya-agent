@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Practice page</title>
+    <style>
+      body { font-family: Georgia, serif; margin: 2rem auto; max-width: 40rem; color: #1c1915; }
+      label { display: block; margin-top: 1rem; }
+      input, select, button, a { font: inherit; }
+      button { margin-right: 0.5rem; margin-top: 1rem; }
+      #log { white-space: pre-wrap; background: #f3ecdf; padding: 1rem; }
+    </style>
+  </head>
+  <body>
+    <h1>Practice page</h1>
+    <p>Use the chat to ask Laya to operate this page. The extension must be loaded and on the same session.</p>
+    <label>Search <input id="search" type="search" placeholder="Search" /></label>
+    <label>Color
+      <select id="color">
+        <option>Red</option>
+        <option>Green</option>
+        <option>Blue</option>
+      </select>
+    </label>
+    <button id="login" type="button">Login</button>
+    <button id="delete" type="button">Delete account</button>
+    <p><a id="more" href="https://example.com">More info</a></p>
+    <div id="log">Waiting.</div>
+    <script>
+      const log = document.getElementById("log");
+      const note = (text) => { log.textContent = text; };
+      document.getElementById("login").addEventListener("click", () => note("Login clicked."));
+      document.getElementById("delete").addEventListener("click", () => note("Delete clicked."));
+      document.getElementById("search").addEventListener("input", (event) => note("Search: " + event.target.value));
+      document.getElementById("color").addEventListener("change", (event) => note("Color: " + event.target.value));
+    </script>
+  </body>
+</html>

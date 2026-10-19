@@ -1,0 +1,9 @@
+node_modules/
+.venv/
+__pycache__/
+*.pyc
+.tools/
+*.log
+dist/
+.DS_Store
+coverage/

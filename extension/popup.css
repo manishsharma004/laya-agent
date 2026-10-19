@@ -1,0 +1,36 @@
+:root { color-scheme: dark; }
+body {
+  margin: 0;
+  width: 280px;
+  padding: 14px;
+  background: #1c1915;
+  color: #f3ecdf;
+  font: 13px/1.4 "Segoe UI", sans-serif;
+}
+header { display: flex; justify-content: space-between; align-items: center; }
+strong { font-family: Georgia, serif; font-size: 18px; letter-spacing: 0.04em; }
+#pill { border: 1px solid #8a6a32; color: #e4b15a; border-radius: 999px; padding: 2px 8px; font-size: 11px; }
+#pill.on { color: #b7d7a8; border-color: #4d6b3c; }
+#detail { min-height: 2.6em; color: #cbbfa8; }
+label { display: block; margin: 8px 0 4px; color: #cbbfa8; }
+input[type="url"], input[type="text"], input[type="password"] {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 4px;
+  background: #26221c;
+  color: #f3ecdf;
+  border: 1px solid #3a342c;
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+.check { display: flex; gap: 8px; align-items: center; }
+button {
+  margin-top: 10px;
+  width: 100%;
+  background: #e4b15a;
+  color: #1c1915;
+  border: 0;
+  border-radius: 6px;
+  padding: 8px;
+  font-weight: 600;
+}

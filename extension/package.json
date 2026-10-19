@@ -1,0 +1,10 @@
+{
+  "name": "laya-extension",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/controller.test.mjs"
+  },
+  "devDependencies": {
+    "jsdom": "^25.0.1"
+  }
+}
