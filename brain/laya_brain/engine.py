@@ -734,12 +734,65 @@ def _widest_choice(questions: Mapping[str, Any]) -> int:
     return widest
 
 
-def ask_runner(runner: Any, state: str, questions: Mapping[str, Any]) -> dict[str, Any]:
-    # A long operation list is answered in small groups so every control stays readable.
-    if _widest_choice(questions) > TOURNAMENT_GROUP and hasattr(runner, "predict"):
-        from laya.shortlist import predict_tournament
+def _grouped_predict(runner: Any, state: str, questions: Mapping[str, Any]) -> dict[str, Any]:
+    """Answer a long choice in groups. A choice head can show about sixteen labels."""
+    pending: dict[str, dict[str, str]] = {}
+    for question_id, question in questions.items():
+        if isinstance(question, Mapping) and question.get("type") == "choice":
+            criteria = question.get("criteria") or {}
+            if isinstance(criteria, Mapping) and len(criteria) > TOURNAMENT_GROUP:
+                pending[question_id] = {str(key): str(value) for key, value in criteria.items()}
+    if not pending:
+        return runner.predict(state, dict(questions))
+    for _round in range(8):
+        if not any(len(criteria) > TOURNAMENT_GROUP for criteria in pending.values()):
+            break
+        groups: list[tuple[str, list[str]]] = []
+        for question_id, criteria in pending.items():
+            labels = list(criteria)
+            if len(labels) <= TOURNAMENT_GROUP:
+                continue
+            parts = -(-len(labels) // TOURNAMENT_GROUP)
+            for index in range(parts):
+                groups.append((question_id, labels[index * len(labels) // parts:(index + 1) * len(labels) // parts]))
+        round_questions: dict[str, Any] = {}
+        for index, (question_id, chunk) in enumerate(groups):
+            question = dict(questions[question_id])
+            question["criteria"] = {label: pending[question_id][label] for label in chunk}
+            round_questions[str(index)] = question
+        result = runner.predict(state, round_questions)
+        answers = result.get("answers") if isinstance(result, Mapping) else {}
+        winners: dict[str, list[str]] = {}
+        for index, (question_id, chunk) in enumerate(groups):
+            choice = _choice(answers or {}, str(index), "")
+            if choice in chunk:
+                winners.setdefault(question_id, []).append(choice)
+        shrunk = False
+        for question_id, labels in winners.items():
+            unique: list[str] = []
+            for label in labels:
+                if label not in unique:
+                    unique.append(label)
+            if len(unique) < len(pending[question_id]):
+                shrunk = True
+            pending[question_id] = {label: pending[question_id][label] for label in unique}
+        if not shrunk:
+            break
+    final = {}
+    for question_id, question in questions.items():
+        if question_id in pending and pending[question_id]:
+            narrowed = dict(question)
+            narrowed["criteria"] = pending[question_id]
+            final[question_id] = narrowed
+        else:
+            final[question_id] = question
+    return runner.predict(state, final)
 
-        result = predict_tournament(runner, state, dict(questions), group_size=TOURNAMENT_GROUP)
+
+def ask_runner(runner: Any, state: str, questions: Mapping[str, Any]) -> dict[str, Any]:
+    # A long control list is answered in small groups so every label stays readable.
+    if _widest_choice(questions) > TOURNAMENT_GROUP and hasattr(runner, "predict"):
+        result = _grouped_predict(runner, state, questions)
     elif hasattr(runner, "predict"):
         result = runner.predict(state, questions)
     elif hasattr(runner, "system_one"):
