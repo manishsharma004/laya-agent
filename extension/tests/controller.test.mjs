@@ -45,6 +45,27 @@ test("clicks, types, and selects", () => {
   assert.equal(window.document.querySelector("select").value, "Blue");
 });
 
+test("collects every visible link, button, and selectable", () => {
+  const links = Array.from({ length: 45 }, (_, index) => `<a href="/p${index}">Link ${index}</a>`).join("");
+  const { window } = dom(`
+    ${links}
+    <button>Save</button>
+    <input type="radio" aria-label="Red" />
+    <input type="checkbox" aria-label="Agree" />
+    <select aria-label="Color"><option>Red</option></select>
+    <div role="switch" aria-label="Dark mode"></div>
+  `);
+  const elements = collectElements(window.document);
+  assert.equal(elements.length, 50);
+  assert.equal(elements.filter((item) => item.role === "link").length, 45);
+  assert.equal(elements.some((item) => item.role === "radio" && item.name === "Red"), true);
+  assert.equal(elements.some((item) => item.role === "checkbox" && item.name === "Agree"), true);
+  const color = elements.find((item) => item.role === "combobox");
+  assert.equal(color.name, "Color");
+  assert.deepEqual(color.options, ["Red"]);
+  assert.equal(elements.some((item) => item.role === "switch" && item.name === "Dark mode"), true);
+});
+
 test("refuses non-http navigation", () => {
   const { window } = dom("<p>Hi</p>");
   const result = executeAction(window.document, { type: "navigate", url: "javascript:alert(1)" });

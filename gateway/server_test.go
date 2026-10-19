@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -63,6 +64,34 @@ func TestChatEnqueuesClickFromBrain(t *testing.T) {
 	view := server.store.View("local")
 	if view.LastResult == nil || view.LastResult.Detail != "Clicked Login." {
 		t.Fatalf("result not stored: %+v", view.LastResult)
+	}
+}
+
+func TestSnapshotKeepsEveryReportedControl(t *testing.T) {
+	server := testServer(t, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"reply": "ok"})
+	})
+	elements := make([]map[string]string, 50)
+	for i := range elements {
+		elements[i] = map[string]string{"id": "e" + strconv.Itoa(i+1), "role": "link", "name": "Link", "tag": "a"}
+	}
+	raw, err := json.Marshal(map[string]any{
+		"sessionId": "wide",
+		"tabId":     4,
+		"url":       "https://example.com",
+		"title":     "Wide",
+		"elements":  elements,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, _ := do(server, http.MethodPost, "/v1/extension/snapshot", string(raw))
+	if status != http.StatusOK {
+		t.Fatalf("snapshot %d", status)
+	}
+	page := server.store.View("wide").Page
+	if page == nil || len(page.Elements) != 50 {
+		t.Fatalf("elements kept: %+v", page)
 	}
 }
 

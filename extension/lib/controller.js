@@ -5,6 +5,7 @@
   }
   root.LayaController = api;
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
+  const ELEMENT_CAP = 200;
   const INTERACTIVE = [
     "a[href]",
     "button",
@@ -15,8 +16,17 @@
     "[role='button']",
     "[role='link']",
     "[role='textbox']",
+    "[role='searchbox']",
     "[role='checkbox']",
+    "[role='radio']",
     "[role='combobox']",
+    "[role='listbox']",
+    "[role='option']",
+    "[role='menuitem']",
+    "[role='menuitemcheckbox']",
+    "[role='menuitemradio']",
+    "[role='tab']",
+    "[role='switch']",
     "[contenteditable='true']",
   ].join(",");
 
@@ -48,7 +58,7 @@
     if (tag === "INPUT") {
       const type = (el.getAttribute("type") || "text").toLowerCase();
       if (type === "checkbox" || type === "radio") return type;
-      if (type === "submit" || type === "button") return "button";
+      if (type === "submit" || type === "button" || type === "reset" || type === "image") return "button";
       return "textbox";
     }
     return tag.toLowerCase();
@@ -75,7 +85,7 @@
   }
 
   function collectElements(doc, limit) {
-    const cap = limit || 40;
+    const cap = limit || ELEMENT_CAP;
     const view = doc.defaultView || globalThis;
     const out = [];
     doc.querySelectorAll(INTERACTIVE).forEach(function (el) {
@@ -85,7 +95,7 @@
         el.dataset.layaId = "e" + view.__layaSeq;
       }
       const inputType = (el.getAttribute("type") || "").toLowerCase();
-      out.push({
+      const item = {
         id: el.dataset.layaId,
         role: el.getAttribute("role") || implicitRole(el),
         name: accessibleName(el),
@@ -94,7 +104,13 @@
         inputType: inputType,
         value: inputType === "password" ? "" : String(el.value || "").slice(0, 80),
         href: el.href || "",
-      });
+      };
+      if (el.tagName === "SELECT") {
+        item.options = Array.from(el.options || []).map(function (option) {
+          return String(option.text || option.value || "").trim();
+        }).filter(Boolean).slice(0, 40);
+      }
+      out.push(item);
     });
     return out;
   }

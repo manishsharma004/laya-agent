@@ -16,7 +16,8 @@ type Element struct {
 	Editable  bool   `json:"editable"`
 	InputType string `json:"inputType"`
 	Value     string `json:"value"`
-	Href      string `json:"href"`
+	Href      string   `json:"href"`
+	Options   []string `json:"options,omitempty"`
 }
 
 type Page struct {

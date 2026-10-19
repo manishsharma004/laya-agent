@@ -8,6 +8,11 @@ import threading
 from typing import Any, Mapping
 
 ACTIONS = ("click", "type", "select", "scroll", "navigate", "extract", "done")
+CONTROL_LIMIT = 200
+OPTION_LIMIT = 40
+# Sixteen short labels fill a 192-token choice head without cutting them into the same prefix.
+TOURNAMENT_GROUP = 16
+CONTROL_STEPS = ("click", "type", "select", "scroll", "extract")
 DESTRUCTIVE = (
     "delete",
     "remove",
@@ -87,7 +92,7 @@ def build_state(prompt: str, page: Mapping[str, Any] | None, history: list[Mappi
     return "\n".join(lines)[:4000]
 
 
-# Choice labels stay fixed. The page inventory is part of the state, not a new option list.
+# The first pass stays a fixed verb list. Controls are a later pass, and only the ones that verb can use.
 QUESTIONS: dict[str, Any] = {
     "intent": {
         "type": "choice",
@@ -123,9 +128,97 @@ QUESTIONS: dict[str, Any] = {
 }
 
 
+def _control_verb(element: Mapping[str, Any]) -> str | None:
+    role = str(element.get("role") or "").lower()
+    tag = str(element.get("tag") or "").lower()
+    input_type = str(element.get("inputType") or "").lower()
+    if role in {"combobox", "listbox", "select"} or tag == "select":
+        return "select"
+    if element.get("editable") or role in {"textbox", "searchbox"} or tag == "textarea":
+        return "type"
+    click_roles = {
+        "link",
+        "button",
+        "checkbox",
+        "radio",
+        "option",
+        "menuitem",
+        "menuitemcheckbox",
+        "menuitemradio",
+        "tab",
+        "switch",
+    }
+    click_types = {"checkbox", "radio", "button", "submit", "reset", "image"}
+    if role in click_roles or tag in {"a", "button", "summary"} or input_type in click_types:
+        return "click"
+    return None
+
+
+def _safe_id(element: Mapping[str, Any]) -> str:
+    element_id = str(element.get("id") or "").strip()
+    if not element_id or not re.fullmatch(r"[A-Za-z0-9_-]+", element_id):
+        return ""
+    return element_id
+
+
+def _control_label(element: Mapping[str, Any], element_id: str) -> str:
+    name = str(element.get("name") or element_id).replace("\n", " ").strip() or element_id
+    detail = f"“{name[:48]}”"
+    href = str(element.get("href") or "").strip()
+    if href:
+        host = re.sub(r"^https?://", "", href.lower()).split("/")[0].removeprefix("www.")
+        if host:
+            detail += f" {host[:32]}"
+    return detail[:64]
+
+
+def _page_elements(page: Mapping[str, Any] | None) -> list[Mapping[str, Any]]:
+    return [element for element in list((page or {}).get("elements") or [])[:CONTROL_LIMIT] if isinstance(element, Mapping)]
+
+
+def control_question(page: Mapping[str, Any] | None, verb: str) -> dict[str, Any] | None:
+    """Choice of every control the verb can use. Scroll may also choose the page itself."""
+    if verb not in CONTROL_STEPS:
+        return None
+    criteria: dict[str, str] = {}
+    for element in _page_elements(page):
+        element_id = _safe_id(element)
+        kind = _control_verb(element)
+        if not element_id or kind is None or element_id in criteria:
+            continue
+        if verb in {"click", "type", "select"} and kind != verb:
+            continue
+        criteria[element_id] = _control_label(element, element_id)
+    if verb == "scroll" and "page" not in criteria:
+        criteria["page"] = "scroll the page itself"
+    if not criteria:
+        return None
+    noun = {"click": "link, button, or switch", "type": "field", "select": "menu", "scroll": "control", "extract": "control"}.get(verb, "control")
+    return {
+        "type": "choice",
+        "instructions": f"Which {noun} should this {verb} use?",
+        "criteria": criteria,
+    }
+
+
+def option_question(element: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    labels: list[str] = []
+    for raw in list((element or {}).get("options") or [])[:OPTION_LIMIT]:
+        label = str(raw).replace("\n", " ").strip()
+        if label and label not in labels:
+            labels.append(label[:80])
+    if not labels:
+        return None
+    return {
+        "type": "choice",
+        "instructions": "Which option in this menu matches the request?",
+        "criteria": {label: label for label in labels},
+    }
+
+
 def build_questions(page: Mapping[str, Any] | None) -> dict[str, Any]:
     del page
-    return QUESTIONS
+    return {key: dict(value) for key, value in QUESTIONS.items()}
 
 
 def _tokens(text: str) -> set[str]:
@@ -285,6 +378,13 @@ def heuristic_predict(state: str, questions: Mapping[str, Any]) -> dict[str, Any
     }
 
 
+def _split_operation(raw: str) -> tuple[str, str | None]:
+    verb, _, element_id = raw.partition(":")
+    if verb in ACTIONS and element_id and re.fullmatch(r"[A-Za-z0-9_-]+", element_id):
+        return verb, element_id
+    return raw, None
+
+
 def _choice(answers: Mapping[str, Any], key: str, default: str) -> str:
     value = (answers.get(key) or {}).get("choice")
     return str(value) if isinstance(value, str) and value else default
@@ -317,11 +417,25 @@ def project_decision(
     elements = {str(element.get("id")): element for element in ((page or {}).get("elements") or [])}
     intent = _choice(answers, "intent", "clarify")
     operation = _choice(answers, "operation", "done")
-    if operation not in ACTIONS:
-        operation = "done"
+    picked = _choice(answers, "target", "none")
     target = "none"
     element = None
-    if page and operation in {"click", "type", "select", "scroll", "extract", "navigate"}:
+    if operation not in ACTIONS:
+        chosen, chosen_id = _split_operation(operation)
+        if chosen_id and chosen_id in elements:
+            operation = chosen
+            target = chosen_id
+            element = elements[chosen_id]
+        else:
+            operation = "done"
+    page_scroll = operation == "scroll" and picked == "page" and picked not in elements
+    if page_scroll:
+        element = None
+        target = "none"
+    elif element is None and picked in elements:
+        element = elements[picked]
+        target = picked
+    elif element is None and page and operation in {"click", "type", "select", "scroll", "extract", "navigate"}:
         matched = _best_element(prompt, list(elements.values()))
         if matched:
             target = matched
@@ -364,7 +478,7 @@ def project_decision(
         else:
             action = {"type": "type", "elementId": target, "text": text, "url": ""}
     elif operation == "select":
-        option = extract_option(prompt)
+        option = extract_option(prompt) or _listed_option(element, _choice(answers, "option", ""))
         if not option:
             reply = "Tell me which option to choose, for example choose Red in Color."
         else:
@@ -399,6 +513,18 @@ def project_decision(
             "answers": answers,
         },
     }
+
+
+def _listed_option(element: Mapping[str, Any] | None, chosen: str) -> str:
+    if not chosen:
+        return ""
+    labels = [str(label).strip() for label in ((element or {}).get("options") or []) if str(label).strip()]
+    if not labels:
+        return chosen
+    for label in labels:
+        if label.lower() == chosen.lower():
+            return label
+    return ""
 
 
 def _name(element: Mapping[str, Any] | None) -> str:
@@ -491,6 +617,10 @@ class Engine:
             try:
                 raw = ask_runner(runner, state, questions)
                 backend = "laya"
+                followed = _follow_up(runner, state, prompt, page, raw.get("answers") if isinstance(raw, Mapping) else None)
+                if followed is not None:
+                    raw = dict(raw)
+                    raw["answers"] = followed
             except Exception as exc:  # noqa: BLE001 - fall back keeps the API usable
                 error = f"{type(exc).__name__}: {exc}"
                 status = "error"
@@ -520,8 +650,70 @@ def build_runner() -> Any:
     raise RuntimeError("installed laya package has neither Router nor load")
 
 
+def _follow_up(
+    runner: Any,
+    state: str,
+    prompt: str,
+    page: Mapping[str, Any] | None,
+    answers: Mapping[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Ask which control, then which menu option, only after the verb is known."""
+    if not isinstance(answers, Mapping):
+        return None
+    merged = dict(answers)
+    operation = _choice(merged, "operation", "done")
+    if ":" in operation:
+        return merged
+    question = control_question(page, operation)
+    if question is None:
+        return merged
+    criteria = question["criteria"]
+    if len(criteria) == 1:
+        picked = next(iter(criteria))
+    else:
+        try:
+            second = ask_runner(runner, state, {"target": question})
+        except Exception:
+            return merged
+        picked = _choice(second.get("answers") if isinstance(second, Mapping) else {}, "target", "")
+        if picked not in criteria:
+            return merged
+    merged["target"] = {"choice": picked}
+    if operation != "select" or extract_option(prompt):
+        return merged
+    element = next((item for item in _page_elements(page) if _safe_id(item) == picked), None)
+    options = option_question(element)
+    if options is None:
+        return merged
+    option_criteria = options["criteria"]
+    if len(option_criteria) == 1:
+        merged["option"] = {"choice": next(iter(option_criteria))}
+        return merged
+    try:
+        third = ask_runner(runner, state, {"option": options})
+    except Exception:
+        return merged
+    chosen = _choice(third.get("answers") if isinstance(third, Mapping) else {}, "option", "")
+    if chosen in option_criteria:
+        merged["option"] = {"choice": chosen}
+    return merged
+
+
+def _widest_choice(questions: Mapping[str, Any]) -> int:
+    widest = 0
+    for question in questions.values():
+        if isinstance(question, Mapping) and question.get("type") == "choice":
+            widest = max(widest, len(question.get("criteria") or {}))
+    return widest
+
+
 def ask_runner(runner: Any, state: str, questions: Mapping[str, Any]) -> dict[str, Any]:
-    if hasattr(runner, "predict"):
+    # A long operation list is answered in small groups so every control stays readable.
+    if _widest_choice(questions) > TOURNAMENT_GROUP and hasattr(runner, "predict"):
+        from laya.shortlist import predict_tournament
+
+        result = predict_tournament(runner, state, dict(questions), group_size=TOURNAMENT_GROUP)
+    elif hasattr(runner, "predict"):
         result = runner.predict(state, questions)
     elif hasattr(runner, "system_one"):
         result = runner.system_one({"text": state}, questions)

@@ -15,6 +15,24 @@ var demoHTML []byte
 
 var sessionPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
+// maxPageElements is how many links, buttons, and selectables one tab may report.
+const maxPageElements = 200
+
+func trimElements(elements []Element) []Element {
+	if len(elements) > maxPageElements {
+		return elements[:maxPageElements]
+	}
+	return elements
+}
+
+func trimOptionalElements(elements *[]Element) *[]Element {
+	if elements == nil {
+		return nil
+	}
+	trimmed := trimElements(*elements)
+	return &trimmed
+}
+
 var allowedActions = map[string]bool{
 	"click": true, "type": true, "select": true, "scroll": true, "navigate": true, "extract": true,
 }
@@ -127,9 +145,7 @@ func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid sessionId"})
 		return
 	}
-	if len(body.Elements) > 40 {
-		body.Elements = body.Elements[:40]
-	}
+	body.Elements = trimElements(body.Elements)
 	s.store.SavePage(id, Page{URL: body.URL, Title: body.Title, Elements: body.Elements, TabID: body.TabID})
 	s.publishSession(id)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "elements": len(body.Elements), "session": s.store.View(id)})
@@ -158,10 +174,7 @@ func (s *Server) handleTabs(w http.ResponseWriter, r *http.Request) {
 	}
 	reports := make([]TabReport, 0, len(body.Tabs))
 	for _, tab := range body.Tabs {
-		if tab.Elements != nil && len(*tab.Elements) > 40 {
-			trimmed := (*tab.Elements)[:40]
-			tab.Elements = &trimmed
-		}
+		tab.Elements = trimOptionalElements(tab.Elements)
 		reports = append(reports, TabReport{
 			TabID:    tab.TabID,
 			WindowID: tab.WindowID,

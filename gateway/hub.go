@@ -124,10 +124,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 		case "tabs":
 			reports := make([]TabReport, 0, len(msg.Tabs))
 			for _, tab := range msg.Tabs {
-				if tab.Elements != nil && len(*tab.Elements) > 40 {
-					trimmed := (*tab.Elements)[:40]
-					tab.Elements = &trimmed
-				}
+				tab.Elements = trimOptionalElements(tab.Elements)
 				reports = append(reports, TabReport{
 					TabID:    tab.TabID,
 					WindowID: tab.WindowID,
