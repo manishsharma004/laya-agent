@@ -87,54 +87,45 @@ def build_state(prompt: str, page: Mapping[str, Any] | None, history: list[Mappi
     return "\n".join(lines)[:4000]
 
 
+# Choice labels stay fixed. The page inventory is part of the state, not a new option list.
+QUESTIONS: dict[str, Any] = {
+    "intent": {
+        "type": "choice",
+        "instructions": "What should the assistant do with the user request?",
+        "criteria": {
+            "control_page": "change or read something on the current page",
+            "answer": "talk about the page or the assistant without changing the page",
+            "clarify": "the request is too vague to choose an action",
+        },
+    },
+    "operation": {
+        "type": "choice",
+        "instructions": "Which single page operation best fulfills the request? Use done when the page should stay as it is.",
+        "criteria": {
+            "click": "activate a control already on this page, including a link such as Gmail",
+            "type": "enter text into an editable field",
+            "select": "choose an option in a dropdown",
+            "scroll": "scroll the page or bring an element into view",
+            "navigate": "leave this page only when the user typed an http(s) address that is not already a control here",
+            "extract": "read text from an element without changing the page",
+            "done": "do not change the page",
+        },
+    },
+    "safe_to_run": {
+        "type": "noul",
+        "instructions": "Is the requested action safe to perform immediately, without paying, deleting, sending a message, or submitting a form?",
+    },
+    "fit": {
+        "type": "score",
+        "instructions": "How precisely can the reported page fulfill the request?",
+        "criteria": ["impossible", "poor", "partial", "good", "exact"],
+    },
+}
+
+
 def build_questions(page: Mapping[str, Any] | None) -> dict[str, Any]:
-    elements = list((page or {}).get("elements") or [])[:24]
-    target: dict[str, str] = {}
-    for element in elements:
-        element_id = str(element.get("id") or "").strip()
-        if not element_id or not re.fullmatch(r"[A-Za-z0-9_-]+", element_id):
-            continue
-        label = f"{element.get('role') or element.get('tag') or 'element'} {element.get('name') or ''}".strip()
-        target[element_id] = (label or element_id)[:180]
-    target["none"] = "no element, or the operation applies to the whole page"
-    return {
-        "intent": {
-            "type": "choice",
-            "instructions": "What should the assistant do with the user request?",
-            "criteria": {
-                "control_page": "change or read something on the current page",
-                "answer": "talk about the page or the assistant without changing the page",
-                "clarify": "the request is too vague to choose an action",
-            },
-        },
-        "operation": {
-            "type": "choice",
-            "instructions": "Which single page operation best fulfills the request? Use done when the page should stay as it is.",
-            "criteria": {
-                "click": "activate a control already on this page, including a link such as Gmail",
-                "type": "enter text into an editable field",
-                "select": "choose an option in a dropdown",
-                "scroll": "scroll the page or bring an element into view",
-                "navigate": "leave this page only when the user typed an http(s) address that is not already a control here",
-                "extract": "read text from an element without changing the page",
-                "done": "do not change the page",
-            },
-        },
-        "target": {
-            "type": "choice",
-            "instructions": "Which element should receive the operation?",
-            "criteria": target,
-        },
-        "safe_to_run": {
-            "type": "noul",
-            "instructions": "Is the requested action safe to perform immediately, without paying, deleting, sending a message, or submitting a form?",
-        },
-        "fit": {
-            "type": "score",
-            "instructions": "How precisely can the reported page fulfill the request?",
-            "criteria": ["impossible", "poor", "partial", "good", "exact"],
-        },
-    }
+    del page
+    return QUESTIONS
 
 
 def _tokens(text: str) -> set[str]:
@@ -328,8 +319,13 @@ def project_decision(
     operation = _choice(answers, "operation", "done")
     if operation not in ACTIONS:
         operation = "done"
-    target = _choice(answers, "target", "none")
-    element = elements.get(target)
+    target = "none"
+    element = None
+    if page and operation in {"click", "type", "select", "scroll", "extract", "navigate"}:
+        matched = _best_element(prompt, list(elements.values()))
+        if matched:
+            target = matched
+            element = elements[matched]
     safe = _noul(answers, "safe_to_run")
     confidence = _confidence(_score(answers, "fit"))
     action = None

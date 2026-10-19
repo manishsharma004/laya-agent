@@ -114,12 +114,15 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(result["action"]["elementId"], "e4")
         self.assertEqual(result["action"]["text"], "Red")
         self.assertIn("User request:", runner.seen[0])
-        self.assertIn("e4", runner.seen[1]["target"]["criteria"])
+        self.assertNotIn("target", runner.seen[1])
+        self.assertEqual(set(runner.seen[1]), {"intent", "operation", "safe_to_run", "fit"})
 
-    def test_questions_skip_unsafe_ids(self):
-        questions = build_questions({"elements": [{"id": "bad id", "name": "Nope"}, {"id": "e9", "name": "Ok", "role": "link"}]})
-        self.assertNotIn("bad id", questions["target"]["criteria"])
-        self.assertIn("e9", questions["target"]["criteria"])
+    def test_questions_stay_static(self):
+        first = build_questions({"elements": [{"id": "bad id", "name": "Nope"}, {"id": "e9", "name": "Ok", "role": "link"}]})
+        second = build_questions(None)
+        self.assertEqual(first, second)
+        self.assertNotIn("target", first)
+        self.assertEqual(set(first["operation"]["criteria"]), {"click", "type", "select", "scroll", "navigate", "extract", "done"})
 
     def test_extractors(self):
         self.assertEqual(extract_typed_text('type "hi there" into Search'), "hi there")
