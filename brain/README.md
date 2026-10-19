@@ -11,7 +11,7 @@ python3 -m venv .venv
 .venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu
 .venv/bin/pip install "transformers>=4.48" "safetensors>=0.4" "huggingface_hub>=0.20" "numpy>=1.20"
 .venv/bin/pip install -r requirements-laya.txt --no-deps
-LAYA_WARMUP=1 BRAIN_HOST=0.0.0.0 BRAIN_PORT=7502 PYTHONPATH=. .venv/bin/python -m laya_brain.server
+LAYA_WARMUP=1 BRAIN_HOST=0.0.0.0 BRAIN_PORT=7506 PYTHONPATH=. .venv/bin/python -m laya_brain.server
 ```
 
 `LAYA_MODE=off` skips the checkpoint. `LAYA_MODE=on` loads it before listening. The default `auto` loads it on a background thread.

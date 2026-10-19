@@ -72,6 +72,7 @@ func TestConfirmationIsHeldUntilReleased(t *testing.T) {
 			"action":            map[string]string{"type": "click", "elementId": "e3", "text": "", "url": ""},
 		})
 	})
+	do(server, http.MethodPost, "/v1/extension/snapshot", `{"tabId":3,"url":"https://example.com","title":"Account","elements":[{"id":"e3","name":"Delete account","role":"button","tag":"button"}]}`)
 	status, payload := do(server, http.MethodPost, "/v1/chat", `{"message":"click Delete account"}`)
 	if status != http.StatusOK || !strings.Contains(payload, `"needsConfirmation":true`) {
 		t.Fatalf("chat %d %s", status, payload)
@@ -93,12 +94,48 @@ func TestRejectsNavigateWithoutHTTP(t *testing.T) {
 			"action": map[string]string{"type": "navigate", "elementId": "", "text": "", "url": "javascript:alert(1)"},
 		})
 	})
+	do(server, http.MethodPost, "/v1/extension/snapshot", `{"tabId":4,"url":"https://example.com","title":"Account","elements":[]}`)
 	status, payload := do(server, http.MethodPost, "/v1/chat", `{"message":"open it"}`)
 	if status != http.StatusOK {
 		t.Fatal(status, payload)
 	}
 	if _, payload = do(server, http.MethodGet, "/v1/extension/commands?sessionId=local", ""); strings.Contains(payload, "javascript") {
 		t.Fatal(payload)
+	}
+}
+
+func TestCommandUISelectsWhichTabsAreAvailable(t *testing.T) {
+	server := testServer(t, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"reply":  "Click “Login”.",
+			"action": map[string]string{"type": "click", "elementId": "e1", "text": "", "url": ""},
+		})
+	})
+	status, payload := do(server, http.MethodPost, "/v1/extension/tabs", `{
+		"sessionId":"local","activeTabId":2,
+		"tabs":[
+			{"tabId":1,"windowId":1,"url":"https://example.com/a","title":"Alpha","active":false,"elements":[]},
+			{"tabId":2,"windowId":1,"url":"https://example.com/b","title":"Beta","active":true,"elements":[{"id":"e1","name":"Login","role":"button","tag":"button"}]}
+		]
+	}`)
+	if status != http.StatusOK || !strings.Contains(payload, `"title":"Beta"`) {
+		t.Fatalf("tabs %d %s", status, payload)
+	}
+	status, _ = do(server, http.MethodPost, "/v1/tabs/availability", `{"tabId":1,"available":false}`)
+	if status != http.StatusOK {
+		t.Fatalf("availability %d", status)
+	}
+	status, payload = do(server, http.MethodPost, "/v1/chat", `{"tabId":1,"message":"click Login"}`)
+	if status != http.StatusConflict || !strings.Contains(payload, "not available") {
+		t.Fatalf("disabled tab %d %s", status, payload)
+	}
+	status, payload = do(server, http.MethodPost, "/v1/chat", `{"tabId":2,"message":"click Login"}`)
+	if status != http.StatusOK || !strings.Contains(payload, `"tabId":2`) {
+		t.Fatalf("enabled tab %d %s", status, payload)
+	}
+	view := server.store.ViewTab("local", 2)
+	if view.FocusTabID != 2 || len(view.Messages) == 0 || view.Messages[0].Content != "click Login" {
+		t.Fatalf("transcript %+v", view.Messages)
 	}
 }
 

@@ -31,6 +31,8 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /v1/status", s.handleStatus)
 	mux.HandleFunc("POST /v1/extension/snapshot", s.handleSnapshot)
+	mux.HandleFunc("POST /v1/extension/tabs", s.handleTabs)
+	mux.HandleFunc("POST /v1/tabs/availability", s.handleAvailability)
 	mux.HandleFunc("GET /v1/extension/commands", s.handleCommands)
 	mux.HandleFunc("POST /v1/extension/result", s.handleResult)
 	mux.HandleFunc("POST /v1/chat", s.handleChat)
@@ -72,7 +74,7 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"service": "laya-gateway",
 		"demo":    "/demo",
-		"routes":  []string{"/health", "/v1/status", "/v1/chat", "/v1/sessions/{id}", "/v1/extension/snapshot", "/v1/extension/commands", "/v1/extension/result"},
+		"routes":  []string{"/health", "/v1/status", "/v1/chat", "/v1/sessions/{id}", "/v1/extension/tabs", "/v1/tabs/availability", "/v1/extension/commands", "/v1/extension/result"},
 	})
 }
 
@@ -124,7 +126,68 @@ func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 		body.Elements = body.Elements[:40]
 	}
 	s.store.SavePage(id, Page{URL: body.URL, Title: body.Title, Elements: body.Elements, TabID: body.TabID})
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "elements": len(body.Elements)})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "elements": len(body.Elements), "session": s.store.View(id)})
+}
+
+func (s *Server) handleTabs(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		SessionID   string `json:"sessionId"`
+		ActiveTabID int    `json:"activeTabId"`
+		Tabs        []struct {
+			TabID    int        `json:"tabId"`
+			WindowID int        `json:"windowId"`
+			URL      string     `json:"url"`
+			Title    string     `json:"title"`
+			Active   bool       `json:"active"`
+			Elements *[]Element `json:"elements"`
+		} `json:"tabs"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	id := sessionID(body.SessionID)
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid sessionId"})
+		return
+	}
+	reports := make([]TabReport, 0, len(body.Tabs))
+	for _, tab := range body.Tabs {
+		if tab.Elements != nil && len(*tab.Elements) > 40 {
+			trimmed := (*tab.Elements)[:40]
+			tab.Elements = &trimmed
+		}
+		reports = append(reports, TabReport{
+			TabID:    tab.TabID,
+			WindowID: tab.WindowID,
+			URL:      tab.URL,
+			Title:    tab.Title,
+			Active:   tab.Active,
+			Elements: tab.Elements,
+		})
+	}
+	tabs := s.store.SyncTabs(id, body.ActiveTabID, reports)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "activeTabId": body.ActiveTabID, "tabs": tabs})
+}
+
+func (s *Server) handleAvailability(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		SessionID string `json:"sessionId"`
+		TabID     int    `json:"tabId"`
+		Available bool   `json:"available"`
+	}
+	if !decode(w, r, &body) {
+		return
+	}
+	id := sessionID(body.SessionID)
+	if id == "" || body.TabID == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "sessionId and tabId are required"})
+		return
+	}
+	if !s.store.SetAvailable(id, body.TabID, body.Available) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown tab"})
+		return
+	}
+	writeJSON(w, http.StatusOK, s.store.ViewTab(id, body.TabID))
 }
 
 func (s *Server) handleCommands(w http.ResponseWriter, r *http.Request) {
@@ -156,7 +219,6 @@ func (s *Server) handleResult(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown command"})
 		return
 	}
-	s.store.Append(id, "system", body.Detail, "", false)
 	writeJSON(w, http.StatusOK, command)
 }
 
@@ -166,12 +228,17 @@ func (s *Server) handleSession(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid sessionId"})
 		return
 	}
-	writeJSON(w, http.StatusOK, s.store.View(id))
+	focus := 0
+	if raw := r.URL.Query().Get("tabId"); raw != "" {
+		focus = atoi(raw)
+	}
+	writeJSON(w, http.StatusOK, s.store.ViewTab(id, focus))
 }
 
 func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		SessionID string `json:"sessionId"`
+		TabID     int    `json:"tabId"`
 		Message   string `json:"message"`
 		Confirmed bool   `json:"confirmed"`
 	}
@@ -185,17 +252,17 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	message := strings.TrimSpace(body.Message)
 	if body.Confirmed {
-		command, ok := s.store.ReleaseHeld(id)
+		command, ok := s.store.ReleaseHeld(id, body.TabID)
 		if !ok {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": "nothing is waiting for confirmation"})
 			return
 		}
-		s.store.Append(id, "assistant", "Confirmed. Running "+command.Type+".", "", false)
+		s.store.Append(id, command.TabID, "assistant", "Confirmed. Running "+command.Type+".", "", false)
 		writeJSON(w, http.StatusOK, map[string]any{
 			"reply":             "Confirmed. Running " + command.Type + ".",
 			"needsConfirmation": false,
 			"command":           command,
-			"session":           s.store.View(id),
+			"session":           s.store.ViewTab(id, command.TabID),
 		})
 		return
 	}
@@ -203,12 +270,17 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "message is required"})
 		return
 	}
-	s.store.ClearHeld(id)
-	s.store.Append(id, "user", message, "", false)
-	page, history := s.store.Context(id)
+	page, history, problem := s.store.Context(id, body.TabID)
+	if problem != "" {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": problem})
+		return
+	}
+	tabID := page.TabID
+	s.store.ClearHeld(id, tabID)
+	s.store.Append(id, tabID, "user", message, "", false)
 	decision, err := s.callAgent(message, page, history)
 	if err != nil {
-		s.store.Append(id, "assistant", "The decision service is unavailable.", "", false)
+		s.store.Append(id, tabID, "assistant", "The decision service is unavailable.", "", false)
 		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
@@ -219,12 +291,15 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	backend, _ := decision["backend"].(string)
 	if parsed, ok := parseAction(action); ok {
 		if needsConfirmation {
-			s.store.Hold(id, parsed)
+			s.store.Hold(id, tabID, parsed)
+		} else if queued, enqueueErr := s.store.Enqueue(id, tabID, parsed); enqueueErr != "" {
+			writeJSON(w, http.StatusConflict, map[string]string{"error": enqueueErr})
+			return
 		} else {
-			command = s.store.Enqueue(id, parsed)
+			command = queued
 		}
 	}
-	s.store.Append(id, "assistant", reply, backend, needsConfirmation)
+	s.store.Append(id, tabID, "assistant", reply, backend, needsConfirmation)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"reply":             reply,
 		"backend":           backend,
@@ -232,7 +307,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		"needsConfirmation": needsConfirmation,
 		"decision":          decision["decision"],
 		"command":           command,
-		"session":           s.store.View(id),
+		"session":           s.store.ViewTab(id, tabID),
 	})
 }
 
@@ -295,6 +370,17 @@ func parseAction(raw map[string]any) (Action, bool) {
 func stringField(raw map[string]any, key string) string {
 	value, _ := raw[key].(string)
 	return value
+}
+
+func atoi(value string) int {
+	n := 0
+	for _, ch := range value {
+		if ch < '0' || ch > '9' {
+			return 0
+		}
+		n = n*10 + int(ch-'0')
+	}
+	return n
 }
 
 func sessionID(value string) string {

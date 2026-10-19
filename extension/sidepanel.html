@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Laya</title>
+    <link rel="stylesheet" href="sidepanel.css" />
+  </head>
+  <body>
+    <header>
+      <div>
+        <p class="eyebrow">Active tab</p>
+        <h1 id="title">Laya</h1>
+      </div>
+      <span id="pill">…</span>
+    </header>
+    <p id="url"></p>
+    <p id="banner" hidden></p>
+    <div id="log"></div>
+    <button id="confirm" type="button" hidden></button>
+    <form id="composer">
+      <textarea id="draft" rows="3" placeholder="Click Login"></textarea>
+      <button type="submit">Send</button>
+    </form>
+    <button id="settings-toggle" type="button">Connection</button>
+    <form id="settings" hidden>
+      <label>API <input id="api" type="url" spellcheck="false" /></label>
+      <label>Session <input id="session" type="text" maxlength="64" spellcheck="false" /></label>
+      <label>Token <input id="token" type="password" placeholder="optional" /></label>
+      <button type="submit">Save</button>
+    </form>
+    <script src="sidepanel.js"></script>
+  </body>
+</html>

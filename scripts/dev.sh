@@ -38,9 +38,9 @@ if [[ ! -d "$ROOT/chat/node_modules" ]]; then
 fi
 
 export BRAIN_HOST="${BRAIN_HOST:-0.0.0.0}"
-export BRAIN_PORT="${BRAIN_PORT:-7502}"
-export LISTEN="${LISTEN:-0.0.0.0:7501}"
-export AGENT_URL="${AGENT_URL:-http://127.0.0.1:7502}"
+export BRAIN_PORT="${BRAIN_PORT:-7506}"
+export LISTEN="${LISTEN:-0.0.0.0:7505}"
+export AGENT_URL="${AGENT_URL:-http://127.0.0.1:7506}"
 export LAYA_MODE="${LAYA_MODE:-auto}"
 export LAYA_WARMUP="${LAYA_WARMUP:-1}"
 export PYTHONPATH="$ROOT/brain"
@@ -58,7 +58,8 @@ BRAIN_PID=$!
 GATEWAY_PID=$!
 
 for _ in 1 2 3 4 5 6 7 8 9 10; do
-  if curl -sf "http://127.0.0.1:7502/health" >/dev/null && curl -sf "http://127.0.0.1:7501/health" >/dev/null; then
+  GW_PORT="${LISTEN##*:}"
+  if curl -sf "http://127.0.0.1:${BRAIN_PORT}/health" >/dev/null && curl -sf "http://127.0.0.1:${GW_PORT}/health" >/dev/null; then
     break
   fi
   sleep 0.3
@@ -66,7 +67,7 @@ done
 
 echo "Brain   http://0.0.0.0:${BRAIN_PORT}"
 echo "Gateway http://${LISTEN}"
-echo "Chat    http://0.0.0.0:7500"
-echo "Practice page http://127.0.0.1:7501/demo"
+echo "Chat    http://0.0.0.0:7504"
+echo "Practice page http://127.0.0.1:7505/demo"
 cd "$ROOT/chat"
 exec npm run dev

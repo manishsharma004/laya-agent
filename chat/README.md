@@ -1,10 +1,12 @@
-# Laya chat
+# Laya command desk
 
-Svelte chat for the page agent. It talks to the Go gateway, shows whether Laya is loaded, and lists the controls the extension last reported.
+Svelte UI for sending commands and choosing tabs. The left column lists every tab the extension has reported. A checked tab is available for the extension to control. Selecting a row addresses the composer at that tab.
+
+The extension sidebar is separate: it always talks about the active tab. Unchecking the active tab there stops the extension from acting on it until it is checked again.
 
 ```bash
 npm install
 npm run dev
 ```
 
-The dev server binds to `0.0.0.0:7500`. The API address defaults to `http://<this-host>:7501` and can be changed from Session. Keep the session id aligned with the extension popup (`local` unless you change both).
+The dev server binds to `0.0.0.0:7504`. The API address defaults to `http://<this-host>:7505` and can be changed from Session. Keep the session id aligned with the extension popup (`local` unless you change both).

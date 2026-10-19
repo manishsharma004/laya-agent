@@ -1,0 +1,48 @@
+:root { color-scheme: dark; }
+body {
+  margin: 0;
+  min-height: 100vh;
+  padding: 14px;
+  box-sizing: border-box;
+  background: #14120f;
+  color: #f3ecdf;
+  font: 13px/1.4 "Segoe UI", sans-serif;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+header { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; }
+.eyebrow { margin: 0; letter-spacing: 0.14em; text-transform: uppercase; font-size: 10px; color: #e4b15a; }
+h1 { margin: 0; font-family: Georgia, serif; font-size: 22px; font-weight: 500; }
+#pill { border: 1px solid #3a342c; border-radius: 999px; padding: 2px 8px; color: #a39886; }
+#pill.on { color: #d5ecc4; border-color: #4d6b3c; }
+#url, #banner { margin: 0; color: #cbbfa8; word-break: break-all; }
+#banner { color: #ffb4a8; }
+#log { flex: 1; display: flex; flex-direction: column; gap: 10px; min-height: 180px; }
+article span { display: block; font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: #a39886; }
+article p { margin: 2px 0 0; white-space: pre-wrap; }
+article.user p { color: #e4b15a; }
+textarea, input {
+  width: 100%;
+  box-sizing: border-box;
+  background: #26221c;
+  color: #f3ecdf;
+  border: 1px solid #3a342c;
+  border-radius: 8px;
+  padding: 8px;
+  font: inherit;
+}
+#composer, #settings { display: grid; gap: 8px; }
+#composer { grid-template-columns: 1fr auto; align-items: end; }
+button {
+  background: #e4b15a;
+  color: #1c1915;
+  border: 0;
+  border-radius: 8px;
+  padding: 8px 12px;
+  font: inherit;
+  font-weight: 650;
+}
+#settings-toggle, #confirm { width: 100%; }
+#settings-toggle { background: transparent; color: #cbbfa8; border: 1px solid #3a342c; }
+label { display: grid; gap: 4px; color: #cbbfa8; font-size: 12px; }

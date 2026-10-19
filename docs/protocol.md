@@ -6,15 +6,33 @@ Ports when started with `scripts/dev.sh`:
 
 | Service | Address |
 | --- | --- |
-| Chat | `http://0.0.0.0:7500` |
-| Gateway | `http://0.0.0.0:7501` |
-| Brain | `http://0.0.0.0:7502` |
+| Chat | `http://0.0.0.0:7504` |
+| Gateway | `http://0.0.0.0:7505` |
+| Brain | `http://0.0.0.0:7506` |
 
 If `API_TOKEN` is set on the gateway, clients send it as `X-Api-Token`.
 
 ## Extension → gateway
 
-`POST /v1/extension/snapshot`
+`POST /v1/extension/tabs` replaces the open-tab inventory. New tabs start available. Tabs omitted from the next post are closed. Omit nothing: send every http(s) tab. `elements` is the control list when the tab is available, and an empty list when it is not.
+
+```json
+{
+  "sessionId": "local",
+  "activeTabId": 12,
+  "tabs": [
+    {"tabId": 12, "windowId": 1, "url": "https://example.com", "title": "Example", "active": true, "elements": []}
+  ]
+}
+```
+
+The response includes each tab's `available` flag. The extension stores those ids and only snapshots and executes on available tabs.
+
+`POST /v1/tabs/availability` with `{ "sessionId", "tabId", "available" }` is how the command desk turns a tab on or off.
+
+`POST /v1/extension/snapshot` still records one tab and marks it active. Prefer `/v1/extension/tabs`.
+
+Legacy `POST /v1/extension/snapshot`
 
 ```json
 {
@@ -56,8 +74,10 @@ Action `type` is one of `click`, `type`, `select`, `scroll`, `navigate`, `extrac
 `POST /v1/chat`
 
 ```json
-{ "sessionId": "local", "message": "Click Login", "confirmed": false }
+{ "sessionId": "local", "tabId": 12, "message": "Click Login", "confirmed": false }
 ```
+
+`tabId` selects the tab. When it is omitted, the gateway uses the active tab. A tab that is not available returns 409. Transcripts are stored per tab. `GET /v1/sessions/{id}?tabId=12` returns that tab's messages plus the full tab list.
 
 A confirmation resend uses `{ "sessionId": "local", "confirmed": true }` and runs the action the brain held back.
 

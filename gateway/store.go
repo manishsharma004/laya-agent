@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"sort"
 	"sync"
 	"time"
 )
@@ -54,24 +55,58 @@ type Message struct {
 	Backend           string `json:"backend,omitempty"`
 }
 
-type session struct {
-	ID         string
+type TabState struct {
+	TabID      int
+	WindowID   int
+	URL        string
+	Title      string
+	Active     bool
+	Available  bool
+	Elements   []Element
+	ReportedAt string
 	Messages   []Message
-	Page       *Page
 	Held       *Action
-	HeldReply  string
-	Commands   []*Command
 	LastResult *Command
 }
 
+type TabReport struct {
+	TabID    int
+	WindowID int
+	URL      string
+	Title    string
+	Active   bool
+	Elements *[]Element
+}
+
+type TabSummary struct {
+	TabID        int    `json:"tabId"`
+	WindowID     int    `json:"windowId"`
+	URL          string `json:"url"`
+	Title        string `json:"title"`
+	Active       bool   `json:"active"`
+	Available    bool   `json:"available"`
+	ElementCount int    `json:"elementCount"`
+	ReportedAt   string `json:"reportedAt"`
+}
+
+type session struct {
+	ID          string
+	Tabs        map[int]*TabState
+	ActiveTabID int
+	Commands    []*Command
+}
+
 type SessionView struct {
-	SessionID          string    `json:"sessionId"`
-	Messages           []Message `json:"messages"`
-	Page               *Page     `json:"page,omitempty"`
-	ExtensionConnected bool      `json:"extensionConnected"`
-	ExtensionLastSeen  string    `json:"extensionLastSeen,omitempty"`
-	Held               *Action   `json:"held,omitempty"`
-	LastResult         *Command  `json:"lastResult,omitempty"`
+	SessionID          string       `json:"sessionId"`
+	ActiveTabID        int          `json:"activeTabId"`
+	FocusTabID         int          `json:"focusTabId"`
+	Tabs               []TabSummary `json:"tabs"`
+	Messages           []Message    `json:"messages"`
+	Page               *Page        `json:"page,omitempty"`
+	ExtensionConnected bool         `json:"extensionConnected"`
+	ExtensionLastSeen  string       `json:"extensionLastSeen,omitempty"`
+	Held               *Action      `json:"held,omitempty"`
+	LastResult         *Command     `json:"lastResult,omitempty"`
 }
 
 type Store struct {
@@ -86,104 +121,175 @@ func NewStore() *Store {
 func (s *Store) get(id string) *session {
 	sess, ok := s.sessions[id]
 	if !ok {
-		sess = &session{ID: id}
+		sess = &session{ID: id, Tabs: map[int]*TabState{}}
 		s.sessions[id] = sess
+	}
+	if sess.Tabs == nil {
+		sess.Tabs = map[int]*TabState{}
 	}
 	return sess
 }
 
 func (s *Store) SavePage(id string, page Page) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	sess := s.get(id)
-	page.ReportedAt = time.Now().UTC().Format(time.RFC3339)
-	sess.Page = &page
+	elements := append([]Element(nil), page.Elements...)
+	s.SyncTabs(id, page.TabID, []TabReport{{
+		TabID:    page.TabID,
+		URL:      page.URL,
+		Title:    page.Title,
+		Active:   true,
+		Elements: &elements,
+	}})
 }
 
-func (s *Store) Append(id, role, content, backend string, needsConfirmation bool) {
+func (s *Store) SyncTabs(id string, activeTabID int, reports []TabReport) []TabSummary {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	sess := s.get(id)
-	sess.Messages = append(sess.Messages, Message{
+	seen := map[int]bool{}
+	now := time.Now().UTC().Format(time.RFC3339)
+	for _, report := range reports {
+		if report.TabID == 0 {
+			continue
+		}
+		seen[report.TabID] = true
+		tab, ok := sess.Tabs[report.TabID]
+		if !ok {
+			tab = &TabState{TabID: report.TabID, Available: true}
+			sess.Tabs[report.TabID] = tab
+		}
+		tab.WindowID = report.WindowID
+		tab.URL = report.URL
+		tab.Title = report.Title
+		tab.Active = report.Active
+		tab.ReportedAt = now
+		if report.Elements != nil {
+			tab.Elements = append([]Element(nil), (*report.Elements)...)
+		}
+	}
+	for tabID := range sess.Tabs {
+		if !seen[tabID] {
+			delete(sess.Tabs, tabID)
+		}
+	}
+	if _, ok := sess.Tabs[activeTabID]; ok {
+		sess.ActiveTabID = activeTabID
+	} else {
+		sess.ActiveTabID = 0
+		for _, tab := range sess.Tabs {
+			if tab.Active {
+				sess.ActiveTabID = tab.TabID
+				break
+			}
+		}
+	}
+	for _, tab := range sess.Tabs {
+		tab.Active = tab.TabID == sess.ActiveTabID
+	}
+	return summarizeLocked(sess)
+}
+
+func (s *Store) SetAvailable(id string, tabID int, available bool) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, ok := s.sessions[id]
+	if !ok {
+		return false
+	}
+	tab, ok := sess.Tabs[tabID]
+	if !ok {
+		return false
+	}
+	tab.Available = available
+	if !available {
+		tab.Held = nil
+	}
+	return true
+}
+
+func (s *Store) Append(id string, tabID int, role, content, backend string, needsConfirmation bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tab := s.tabLocked(id, tabID)
+	if tab == nil {
+		return
+	}
+	tab.Messages = append(tab.Messages, Message{
 		Role:              role,
 		Content:           content,
 		At:                time.Now().UTC().Format(time.RFC3339),
 		NeedsConfirmation: needsConfirmation,
 		Backend:           backend,
 	})
-	if len(sess.Messages) > 200 {
-		sess.Messages = sess.Messages[len(sess.Messages)-200:]
+	if len(tab.Messages) > 200 {
+		tab.Messages = tab.Messages[len(tab.Messages)-200:]
 	}
 }
 
-func (s *Store) Context(id string) (*Page, []Message) {
+func (s *Store) Context(id string, tabID int) (*Page, []Message, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	sess := s.get(id)
-	history := append([]Message(nil), sess.Messages...)
-	if sess.Page == nil {
-		return nil, history
+	tabID = resolveTabLocked(sess, tabID)
+	tab := sess.Tabs[tabID]
+	if tab == nil {
+		return nil, nil, "no open tab"
 	}
-	page := *sess.Page
-	page.Elements = append([]Element(nil), sess.Page.Elements...)
-	return &page, history
+	if !tab.Available {
+		return nil, nil, "tab is not available"
+	}
+	history := append([]Message(nil), tab.Messages...)
+	page := pageFrom(tab)
+	return &page, history, ""
 }
 
-func (s *Store) Hold(id string, action Action) {
+func (s *Store) Hold(id string, tabID int, action Action) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if tab := s.tabLocked(id, tabID); tab != nil {
+		tab.Held = &action
+	}
+}
+
+func (s *Store) ClearHeld(id string, tabID int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	sess := s.get(id)
-	sess.Held = &action
+	tabID = resolveTabLocked(sess, tabID)
+	if tab := sess.Tabs[tabID]; tab != nil {
+		tab.Held = nil
+	}
 }
 
-func (s *Store) ClearHeld(id string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.get(id).Held = nil
-}
-
-func (s *Store) Enqueue(id string, action Action) *Command {
+func (s *Store) Enqueue(id string, tabID int, action Action) (*Command, string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	sess := s.get(id)
-	command := &Command{
-		ID:        newID(),
-		SessionID: id,
-		Type:      action.Type,
-		ElementID: action.ElementID,
-		Text:      action.Text,
-		URL:       action.URL,
-		Status:    "queued",
+	tabID = resolveTabLocked(sess, tabID)
+	tab := sess.Tabs[tabID]
+	if tab == nil {
+		return nil, "no open tab"
 	}
-	if sess.Page != nil {
-		command.TabID = sess.Page.TabID
+	if !tab.Available {
+		return nil, "tab is not available"
 	}
-	sess.Held = nil
+	command := newCommand(id, tabID, action)
+	tab.Held = nil
 	sess.Commands = append(sess.Commands, command)
-	return command
+	return command, ""
 }
 
-func (s *Store) ReleaseHeld(id string) (*Command, bool) {
+func (s *Store) ReleaseHeld(id string, tabID int) (*Command, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	sess := s.get(id)
-	if sess.Held == nil {
+	tabID = resolveTabLocked(sess, tabID)
+	tab := sess.Tabs[tabID]
+	if tab == nil || tab.Held == nil || !tab.Available {
 		return nil, false
 	}
-	action := *sess.Held
-	sess.Held = nil
-	command := &Command{
-		ID:        newID(),
-		SessionID: id,
-		Type:      action.Type,
-		ElementID: action.ElementID,
-		Text:      action.Text,
-		URL:       action.URL,
-		Status:    "queued",
-	}
-	if sess.Page != nil {
-		command.TabID = sess.Page.TabID
-	}
+	action := *tab.Held
+	tab.Held = nil
+	command := newCommand(id, tabID, action)
 	sess.Commands = append(sess.Commands, command)
 	return command, true
 }
@@ -197,7 +303,8 @@ func (s *Store) TakeQueued(id string) []Command {
 	}
 	out := []Command{}
 	for _, command := range sess.Commands {
-		if command.Status == "queued" {
+		tab := sess.Tabs[command.TabID]
+		if command.Status == "queued" && tab != nil && tab.Available {
 			command.Status = "delivered"
 			out = append(out, *command)
 		}
@@ -224,36 +331,50 @@ func (s *Store) Finish(id, commandID, detail string, ok bool) (*Command, bool) {
 			command.Status = "error"
 		}
 		copied := *command
-		sess.LastResult = &copied
+		if tab := sess.Tabs[command.TabID]; tab != nil {
+			tab.LastResult = &copied
+			tab.Messages = append(tab.Messages, Message{
+				Role:    "system",
+				Content: detail,
+				At:      time.Now().UTC().Format(time.RFC3339),
+			})
+		}
 		return &copied, true
 	}
 	return nil, false
 }
 
 func (s *Store) View(id string) SessionView {
+	return s.ViewTab(id, 0)
+}
+
+func (s *Store) ViewTab(id string, focus int) SessionView {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	sess, ok := s.sessions[id]
 	if !ok {
-		return SessionView{SessionID: id, Messages: []Message{}}
+		return SessionView{SessionID: id, Messages: []Message{}, Tabs: []TabSummary{}}
 	}
+	focus = resolveTabLocked(sess, focus)
 	view := SessionView{
-		SessionID:  id,
-		Messages:   append([]Message(nil), sess.Messages...),
-		LastResult: sess.LastResult,
-		Held:       sess.Held,
+		SessionID:   id,
+		ActiveTabID: sess.ActiveTabID,
+		FocusTabID:  focus,
+		Tabs:        summarizeLocked(sess),
+		Messages:    []Message{},
 	}
-	if sess.Page != nil {
-		page := *sess.Page
-		page.Elements = append([]Element(nil), sess.Page.Elements...)
-		view.Page = &page
-		view.ExtensionLastSeen = page.ReportedAt
-		if reported, err := time.Parse(time.RFC3339, page.ReportedAt); err == nil {
-			view.ExtensionConnected = time.Since(reported) < 8*time.Second
-		}
+	tab := sess.Tabs[focus]
+	if tab == nil {
+		return view
 	}
-	if view.Messages == nil {
-		view.Messages = []Message{}
+	view.Messages = append([]Message(nil), tab.Messages...)
+	page := pageFrom(tab)
+	view.Page = &page
+	view.Held = tab.Held
+	view.LastResult = tab.LastResult
+	view.ExtensionLastSeen = tab.ReportedAt
+	if reported, err := time.Parse(time.RFC3339, tab.ReportedAt); err == nil {
+		view.ExtensionConnected = time.Since(reported) < 8*time.Second
 	}
 	return view
 }
@@ -262,6 +383,70 @@ func (s *Store) SessionCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.sessions)
+}
+
+func (s *Store) tabLocked(id string, tabID int) *TabState {
+	sess := s.get(id)
+	tabID = resolveTabLocked(sess, tabID)
+	return sess.Tabs[tabID]
+}
+
+func resolveTabLocked(sess *session, tabID int) int {
+	if tabID != 0 {
+		if _, ok := sess.Tabs[tabID]; ok {
+			return tabID
+		}
+	}
+	if _, ok := sess.Tabs[sess.ActiveTabID]; ok {
+		return sess.ActiveTabID
+	}
+	return tabID
+}
+
+func pageFrom(tab *TabState) Page {
+	return Page{
+		URL:        tab.URL,
+		Title:      tab.Title,
+		Elements:   append([]Element(nil), tab.Elements...),
+		TabID:      tab.TabID,
+		ReportedAt: tab.ReportedAt,
+	}
+}
+
+func summarizeLocked(sess *session) []TabSummary {
+	out := make([]TabSummary, 0, len(sess.Tabs))
+	for _, tab := range sess.Tabs {
+		out = append(out, TabSummary{
+			TabID:        tab.TabID,
+			WindowID:     tab.WindowID,
+			URL:          tab.URL,
+			Title:        tab.Title,
+			Active:       tab.Active,
+			Available:    tab.Available,
+			ElementCount: len(tab.Elements),
+			ReportedAt:   tab.ReportedAt,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Active != out[j].Active {
+			return out[i].Active
+		}
+		return out[i].TabID < out[j].TabID
+	})
+	return out
+}
+
+func newCommand(sessionID string, tabID int, action Action) *Command {
+	return &Command{
+		ID:        newID(),
+		SessionID: sessionID,
+		TabID:     tabID,
+		Type:      action.Type,
+		ElementID: action.ElementID,
+		Text:      action.Text,
+		URL:       action.URL,
+		Status:    "queued",
+	}
 }
 
 func newID() string {

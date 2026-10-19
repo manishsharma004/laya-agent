@@ -76,7 +76,7 @@ def serve(engine: Engine, host: str, port: int) -> None:
 
 def main() -> None:
     host = os.environ.get("BRAIN_HOST", "0.0.0.0")
-    port = int(os.environ.get("BRAIN_PORT", "7502"))
+    port = int(os.environ.get("BRAIN_PORT", "7506"))
     serve(Engine(), host, port)
 
 

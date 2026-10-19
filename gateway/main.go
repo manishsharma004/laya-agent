@@ -8,8 +8,8 @@ import (
 )
 
 func main() {
-	listen := getenv("LISTEN", "0.0.0.0:7501")
-	agentURL := getenv("AGENT_URL", "http://127.0.0.1:7502")
+	listen := getenv("LISTEN", "0.0.0.0:7505")
+	agentURL := getenv("AGENT_URL", "http://127.0.0.1:7506")
 	server := &Server{
 		store:    NewStore(),
 		agentURL: agentURL,

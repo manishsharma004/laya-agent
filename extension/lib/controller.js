@@ -25,8 +25,13 @@
   function accessibleName(el) {
     const labelled = el.getAttribute("aria-label") || el.getAttribute("alt") || el.getAttribute("title");
     if (labelled && labelled.trim()) return labelled.trim().slice(0, 120);
-    if (el.labels && el.labels[0] && el.labels[0].innerText) {
-      return el.labels[0].innerText.trim().replace(/\s+/g, " ").slice(0, 120);
+    if (el.labels && el.labels[0]) {
+      let fromLabel = "";
+      el.labels[0].childNodes.forEach(function (node) {
+        if (node.nodeType === 3) fromLabel += node.textContent;
+      });
+      fromLabel = fromLabel.trim().replace(/\s+/g, " ");
+      if (fromLabel) return fromLabel.slice(0, 120);
     }
     const inputType = (el.getAttribute("type") || "").toLowerCase();
     const value = inputType === "password" ? "" : el.value || "";

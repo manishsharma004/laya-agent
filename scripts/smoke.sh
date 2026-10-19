@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Exercise the gateway and brain with a fake page snapshot.
 set -euo pipefail
-API="${API:-http://127.0.0.1:7501}"
+API="${API:-http://127.0.0.1:7505}"
 curl -sf "$API/health" >/dev/null
 curl -sf -X POST "$API/v1/extension/snapshot" \
   -H 'content-type: application/json' \
