@@ -307,6 +307,41 @@ class EngineTests(unittest.TestCase):
         self.assertTrue(result["action"]["elementId"].startswith("e"))
         self.assertGreater(runner.calls, 2)
 
+    def test_signin_beats_a_shorter_gmail_link(self):
+        page = {
+            "url": "https://workspace.google.com/intl/en-US/gmail/",
+            "title": "Gmail",
+            "elements": [
+                {"id": "e1", "role": "link", "name": "Gmail", "tag": "a", "href": "https://workspace.google.com/gmail/"},
+                {"id": "e2", "role": "link", "name": "Sign in", "tag": "a", "href": "https://accounts.google.com/"},
+                {"id": "e3", "role": "link", "name": "Create an account", "tag": "a"},
+            ],
+        }
+        result = self.engine.decide({"prompt": "take me to gmail signin page", "page": page})
+        self.assertEqual(result["backend"], "grounded")
+        self.assertEqual(result["action"]["elementId"], "e2")
+        self.assertFalse(result["needsConfirmation"])
+
+    def test_signin_page_is_done_without_the_model(self):
+        page = {
+            "url": "https://accounts.google.com/v3/signin/identifier",
+            "title": "Sign in - Google Accounts",
+            "elements": [
+                {"id": "e1", "role": "textbox", "name": "Email or phone", "tag": "input", "editable": True},
+                {"id": "e2", "role": "button", "name": "Next", "tag": "button"},
+                {"id": "e3", "role": "link", "name": "Page", "tag": "a"},
+            ],
+        }
+        runner = FakeRunner({"operation": {"choice": "click"}, "target": {"choice": "e2"}, "safe_to_run": {"noul": 0.2}})
+        self.engine._router = runner
+        self.engine._status = "ready"
+        result = self.engine.decide({"prompt": "take me to gmail signin page", "page": page})
+        self.assertEqual(result["backend"], "grounded")
+        self.assertIsNone(result["action"])
+        self.assertEqual(result["decision"]["operation"], "done")
+        self.assertIn("Sign in", result["reply"])
+        self.assertEqual(runner.calls, [])
+
     def test_named_link_beats_the_search_box_button(self):
         page = {
             "url": "https://www.google.com/",

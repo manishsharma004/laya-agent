@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"time"
 )
 
 //go:embed demo.html
@@ -148,6 +149,7 @@ func (s *Server) handleSnapshot(w http.ResponseWriter, r *http.Request) {
 	body.Elements = trimElements(body.Elements)
 	s.store.SavePage(id, Page{URL: body.URL, Title: body.Title, Elements: body.Elements, TabID: body.TabID})
 	s.publishSession(id)
+	s.noteURL(id, body.TabID, body.URL)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "elements": len(body.Elements), "session": s.store.View(id)})
 }
 
@@ -187,6 +189,9 @@ func (s *Server) handleTabs(w http.ResponseWriter, r *http.Request) {
 	tabs := s.store.SyncTabs(id, body.ActiveTabID, reports)
 	s.publishSession(id)
 	s.pushCommands(id)
+	for _, tab := range body.Tabs {
+		s.noteURL(id, tab.TabID, tab.URL)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "activeTabId": body.ActiveTabID, "tabs": tabs})
 }
 
@@ -242,6 +247,7 @@ func (s *Server) handleResult(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.publishSession(id)
+	s.afterCommand(id, command)
 	writeJSON(w, http.StatusOK, command)
 }
 
@@ -317,12 +323,16 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if parsed, ok := parseAction(action); ok {
 		if needsConfirmation {
 			s.store.Hold(id, tabID, parsed)
+			s.store.SetGoal(id, tabID, message, page.URL, controlKey(page, parsed))
 		} else if queued, enqueueErr := s.store.Enqueue(id, tabID, parsed); enqueueErr != "" {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": enqueueErr})
 			return
 		} else {
 			command = queued
+			s.store.SetGoal(id, tabID, message, page.URL, controlKey(page, parsed))
 		}
+	} else {
+		s.store.ClearGoal(id, tabID)
 	}
 	s.store.Append(id, tabID, "assistant", reply, backend, needsConfirmation)
 	s.publishSession(id)
@@ -336,6 +346,163 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		"command":           command,
 		"session":           s.store.ViewTab(id, tabID),
 	})
+}
+
+func compactText(text string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(text) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func controlKey(page *Page, action Action) string {
+	label := action.ElementID
+	if page != nil {
+		for _, element := range page.Elements {
+			if element.ID == action.ElementID && element.Name != "" {
+				if compact := compactText(element.Name); compact != "" {
+					label = compact
+				}
+				break
+			}
+		}
+	}
+	switch action.Type {
+	case "navigate":
+		return "navigate\t" + action.URL
+	case "type", "select":
+		return action.Type + "\t" + label + "\t" + compactText(action.Text)
+	default:
+		return action.Type + "\t" + label
+	}
+}
+
+func (s *Server) noteURL(id string, tabID int, pageURL string) {
+	gen := s.store.GoalMoved(id, tabID, pageURL)
+	if gen != 0 {
+		go s.followGoal(id, tabID, gen)
+	}
+}
+
+func (s *Server) afterCommand(id string, command *Command) {
+	if command == nil {
+		return
+	}
+	if command.OK == nil || !*command.OK {
+		s.store.ClearGoal(id, command.TabID)
+		s.publishSession(id)
+		return
+	}
+	gen := s.store.ArmContinue(id, command.TabID)
+	if gen == 0 {
+		return
+	}
+	s.scheduleContinue(id, command.TabID, gen)
+}
+
+func (s *Server) scheduleContinue(id string, tabID, gen int) {
+	time.AfterFunc(1200*time.Millisecond, func() {
+		s.followGoal(id, tabID, gen)
+	})
+}
+
+func (s *Server) followGoal(id string, tabID, gen int) {
+	goal, stop, ok := s.store.BeginContinue(id, tabID, gen)
+	if !ok {
+		return
+	}
+	if stop == "limit" {
+		s.store.Append(id, tabID, "assistant", "I stopped after 4 steps.", "", false)
+		s.publishSession(id)
+		return
+	}
+	page, history, problem := s.store.Context(id, tabID)
+	if problem != "" {
+		s.store.ClearGoal(id, tabID)
+		s.store.Append(id, tabID, "assistant", problem, "", false)
+		s.publishSession(id)
+		return
+	}
+	decision, err := s.callAgent(goal, page, history)
+	if err != nil {
+		s.store.ClearGoal(id, tabID)
+		s.store.Append(id, tabID, "assistant", "The decision service is unavailable.", "", false)
+		s.publishSession(id)
+		return
+	}
+	latest, latestHistory, latestProblem := s.store.Context(id, tabID)
+	if latestProblem == "" && latest != nil && latest.URL != page.URL {
+		decision, err = s.callAgent(goal, latest, latestHistory)
+		if err != nil {
+			s.store.ClearGoal(id, tabID)
+			s.store.Append(id, tabID, "assistant", "The decision service is unavailable.", "", false)
+			s.publishSession(id)
+			return
+		}
+		page = latest
+	}
+	s.applyFollowup(id, tabID, page, decision)
+}
+
+func (s *Server) applyFollowup(id string, tabID int, page *Page, decision map[string]any) {
+	pageURL := ""
+	if page != nil {
+		pageURL = page.URL
+	}
+	reply, _ := decision["reply"].(string)
+	backend, _ := decision["backend"].(string)
+	needsConfirmation, _ := decision["needsConfirmation"].(bool)
+	operation := ""
+	if raw, ok := decision["decision"].(map[string]any); ok {
+		operation, _ = raw["operation"].(string)
+	}
+	action, _ := decision["action"].(map[string]any)
+	parsed, parsedOK := parseAction(action)
+	if !parsedOK || operation == "done" {
+		s.store.ClearGoal(id, tabID)
+		if reply != "" {
+			s.store.Append(id, tabID, "assistant", reply, backend, false)
+		}
+		s.publishSession(id)
+		return
+	}
+	if controlKey(page, parsed) == s.store.GoalAction(id, tabID) {
+		if pageURL != "" && pageURL == s.store.GoalURL(id, tabID) {
+			if s.store.NoteSamePageWait(id, tabID) >= 5 {
+				s.store.ClearGoal(id, tabID)
+				s.publishSession(id)
+				return
+			}
+			if gen := s.store.ArmContinue(id, tabID); gen != 0 {
+				s.scheduleContinue(id, tabID, gen)
+			}
+			return
+		}
+		s.store.ClearGoal(id, tabID)
+		s.store.Append(id, tabID, "assistant", "Done.", "", false)
+		s.publishSession(id)
+		return
+	}
+	if needsConfirmation {
+		s.store.Hold(id, tabID, parsed)
+		s.store.NoteGoalAction(id, tabID, pageURL, controlKey(page, parsed))
+		s.store.Append(id, tabID, "assistant", reply, backend, true)
+		s.publishSession(id)
+		return
+	}
+	if _, enqueueErr := s.store.Enqueue(id, tabID, parsed); enqueueErr != "" {
+		s.store.ClearGoal(id, tabID)
+		s.store.Append(id, tabID, "assistant", enqueueErr, "", false)
+		s.publishSession(id)
+		return
+	}
+	s.store.NoteGoalAction(id, tabID, pageURL, controlKey(page, parsed))
+	s.store.Append(id, tabID, "assistant", reply, backend, false)
+	s.publishSession(id)
+	s.pushCommands(id)
 }
 
 func (s *Server) callAgent(prompt string, page *Page, history []Message) (map[string]any, error) {

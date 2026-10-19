@@ -67,6 +67,127 @@ func TestChatEnqueuesClickFromBrain(t *testing.T) {
 	}
 }
 
+func TestGoalContinuesWhenThePageChanges(t *testing.T) {
+	calls := 0
+	server := testServer(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if calls == 1 {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"reply":             "Click “Gmail”.",
+				"backend":           "grounded",
+				"needsConfirmation": false,
+				"action":            map[string]string{"type": "click", "elementId": "e1", "text": "", "url": ""},
+				"decision":          map[string]any{"operation": "click", "target": "e1"},
+			})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"reply":             "This is the sign-in page.",
+			"backend":           "grounded",
+			"needsConfirmation": false,
+			"decision":          map[string]any{"operation": "done"},
+		})
+	})
+	status, _ := do(server, http.MethodPost, "/v1/extension/snapshot", `{"sessionId":"local","tabId":7,"url":"https://workspace.google.com/intl/en-US/gmail/","title":"Gmail","elements":[{"id":"e1","role":"link","name":"Gmail","tag":"a"}]}`)
+	if status != http.StatusOK {
+		t.Fatalf("snapshot %d", status)
+	}
+	status, _ = do(server, http.MethodPost, "/v1/chat", `{"sessionId":"local","message":"take me to gmail signin page"}`)
+	if status != http.StatusOK {
+		t.Fatalf("chat %d", status)
+	}
+	status, payload := do(server, http.MethodGet, "/v1/extension/commands?sessionId=local", "")
+	var queued struct {
+		Commands []Command `json:"commands"`
+	}
+	if err := json.Unmarshal([]byte(payload), &queued); err != nil || len(queued.Commands) != 1 {
+		t.Fatalf("commands %d %+v", status, payload)
+	}
+	status, _ = do(server, http.MethodPost, "/v1/extension/result", `{"sessionId":"local","commandId":"`+queued.Commands[0].ID+`","ok":true,"detail":"Clicked Gmail."}`)
+	if status != http.StatusOK {
+		t.Fatalf("result %d", status)
+	}
+	status, _ = do(server, http.MethodPost, "/v1/extension/snapshot", `{"sessionId":"local","tabId":7,"url":"https://accounts.google.com/signin","title":"Sign in","elements":[{"id":"e9","role":"textbox","name":"Email","tag":"input","editable":true}]}`)
+	if status != http.StatusOK {
+		t.Fatalf("next snapshot %d", status)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	var view SessionView
+	for time.Now().Before(deadline) {
+		view = server.store.View("local")
+		joined := ""
+		for _, message := range view.Messages {
+			joined += message.Content + "\n"
+		}
+		if strings.Contains(joined, "sign-in page") {
+			if calls != 2 {
+				t.Fatalf("brain calls %d", calls)
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("goal did not continue: %+v calls=%d", view.Messages, calls)
+}
+
+func TestGoalStopsWhenTheNextClickRepeatsTheSameControl(t *testing.T) {
+	calls := 0
+	server := testServer(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		elementID := "e1"
+		if calls > 1 {
+			elementID = "e9"
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"reply":             "Click “Sign in”.",
+			"backend":           "grounded",
+			"needsConfirmation": false,
+			"action":            map[string]string{"type": "click", "elementId": elementID, "text": "", "url": ""},
+			"decision":          map[string]any{"operation": "click", "target": elementID},
+		})
+	})
+	status, _ := do(server, http.MethodPost, "/v1/extension/snapshot", `{"sessionId":"local","tabId":7,"url":"https://workspace.google.com/intl/en-US/gmail/","title":"Gmail","elements":[{"id":"e1","role":"link","name":"Sign in","tag":"a"}]}`)
+	if status != http.StatusOK {
+		t.Fatalf("snapshot %d", status)
+	}
+	status, _ = do(server, http.MethodPost, "/v1/chat", `{"sessionId":"local","message":"take me to gmail signin page"}`)
+	if status != http.StatusOK {
+		t.Fatalf("chat %d", status)
+	}
+	_, payload := do(server, http.MethodGet, "/v1/extension/commands?sessionId=local", "")
+	var queued struct {
+		Commands []Command `json:"commands"`
+	}
+	if err := json.Unmarshal([]byte(payload), &queued); err != nil || len(queued.Commands) != 1 {
+		t.Fatalf("commands %+v", payload)
+	}
+	status, _ = do(server, http.MethodPost, "/v1/extension/result", `{"sessionId":"local","commandId":"`+queued.Commands[0].ID+`","ok":true,"detail":"Clicked Sign in."}`)
+	if status != http.StatusOK {
+		t.Fatalf("result %d", status)
+	}
+	status, _ = do(server, http.MethodPost, "/v1/extension/snapshot", `{"sessionId":"local","tabId":7,"url":"https://accounts.google.com/signin","title":"Sign in","elements":[{"id":"e9","role":"link","name":"Sign in","tag":"a"}]}`)
+	if status != http.StatusOK {
+		t.Fatalf("next snapshot %d", status)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		view := server.store.View("local")
+		joined := ""
+		for _, message := range view.Messages {
+			joined += message.Content + "\n"
+		}
+		if strings.Contains(joined, "Done.") {
+			_, payload = do(server, http.MethodGet, "/v1/extension/commands?sessionId=local", "")
+			if strings.Contains(payload, "e9") {
+				t.Fatalf("repeated click was queued: %s", payload)
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("repeat was not stopped, calls=%d", calls)
+}
+
 func TestSnapshotKeepsEveryReportedControl(t *testing.T) {
 	server := testServer(t, func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"reply": "ok"})

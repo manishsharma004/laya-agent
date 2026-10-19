@@ -632,6 +632,23 @@ class Engine:
             )
             grounded["layaStatus"] = self.health()["laya"]
             return grounded
+        if _page_matches_request(prompt, page):
+            title = str((page or {}).get("title") or "this page")
+            return {
+                "reply": f"This page is “{title}”.",
+                "backend": "grounded",
+                "needsConfirmation": False,
+                "action": None,
+                "decision": {
+                    "intent": "answer",
+                    "operation": "done",
+                    "target": "none",
+                    "confidence": 1.0,
+                    "safeToRun": None,
+                    "answers": {},
+                },
+                "layaStatus": self.health()["laya"],
+            }
         state = build_state(prompt, page, history)
         questions = build_questions(page)
         backend = "heuristic"
@@ -678,25 +695,65 @@ def build_runner() -> Any:
     raise RuntimeError("installed laya package has neither Router nor load")
 
 
+_GENERIC_NAMES = {"page", "link", "button", "here", "this", "that", "menu", "item"}
+_DESTINATION_FILLER = _GENERIC_NAMES | {
+    "take", "me", "to", "the", "a", "an", "please", "open", "click", "press", "tap",
+    "hit", "go", "goto", "show", "find", "get", "my", "on", "in", "of", "for", "and",
+    "or", "just", "now", "into", "from", "with", "want", "need",
+}
+
+
+def _compact(text: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", text.lower())
+
+
 def _named_control(prompt: str, page: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
-    """The control whose name the user actually wrote, when that name is on the page."""
+    """The control whose name the user actually wrote, when that name is on the page.
+
+    Spaces are ignored, so “signin” matches “Sign in”. The longest name wins, so
+    “gmail signin” prefers Sign in over a link that is only named Gmail.
+    """
     if "?" in prompt:
         return None
-    prompt_lower = prompt.lower()
+    prompt_compact = _compact(prompt)
     best: Mapping[str, Any] | None = None
     best_score = 0
     for element in _page_elements(page):
         name = str(element.get("name") or "").strip()
-        if len(name) < 3 or name.lower() not in prompt_lower:
+        compact = _compact(name)
+        if len(compact) < 4 or compact in _GENERIC_NAMES or compact not in prompt_compact:
             continue
         verb = _control_verb(element)
         if verb == "select" and not extract_option(prompt):
             continue
-        score = sum(len(token) for token in _tokens(name))
-        if score > best_score and _safe_id(element):
+        if len(compact) > best_score and _safe_id(element):
             best = element
-            best_score = score
+            best_score = len(compact)
     return best
+
+
+def _page_matches_request(prompt: str, page: Mapping[str, Any] | None) -> bool:
+    """True when the address or title already contains the request's destination.
+
+    Used after no named control remains, so the continuation can stop without
+    loading a checkpoint. “signin” must be present; a Gmail marketing URL is not enough.
+    """
+    if not page or "?" in prompt:
+        return False
+    destination = extract_url(prompt)
+    if destination:
+        current = str(page.get("url") or "").rstrip("/")
+        target = destination.rstrip("/")
+        return current == target or current.startswith(target + "/")
+    tokens = [
+        word
+        for word in re.findall(r"[a-z0-9]+", prompt.lower())
+        if len(word) >= 4 and word not in _DESTINATION_FILLER
+    ]
+    if not tokens:
+        return False
+    haystack = _compact(f"{page.get('url') or ''} {page.get('title') or ''}")
+    return max(tokens, key=len) in haystack
 
 
 def _wants_control(prompt: str) -> bool:

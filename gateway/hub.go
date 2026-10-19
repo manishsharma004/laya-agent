@@ -136,12 +136,16 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 			}
 			s.store.SyncTabs(id, msg.ActiveTab, reports)
 			s.publishSession(id)
+			for _, tab := range msg.Tabs {
+				s.noteURL(id, tab.TabID, tab.URL)
+			}
 		case "result":
 			if msg.CommandID == "" {
 				continue
 			}
-			if _, ok := s.store.Finish(id, msg.CommandID, msg.Detail, msg.OK); ok {
+			if command, ok := s.store.Finish(id, msg.CommandID, msg.Detail, msg.OK); ok {
 				s.publishSession(id)
+				s.afterCommand(id, command)
 			}
 		}
 	}

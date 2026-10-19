@@ -9,13 +9,13 @@ import (
 )
 
 type Element struct {
-	ID        string `json:"id"`
-	Role      string `json:"role"`
-	Name      string `json:"name"`
-	Tag       string `json:"tag"`
-	Editable  bool   `json:"editable"`
-	InputType string `json:"inputType"`
-	Value     string `json:"value"`
+	ID        string   `json:"id"`
+	Role      string   `json:"role"`
+	Name      string   `json:"name"`
+	Tag       string   `json:"tag"`
+	Editable  bool     `json:"editable"`
+	InputType string   `json:"inputType"`
+	Value     string   `json:"value"`
 	Href      string   `json:"href"`
 	Options   []string `json:"options,omitempty"`
 }
@@ -57,17 +57,23 @@ type Message struct {
 }
 
 type TabState struct {
-	TabID      int
-	WindowID   int
-	URL        string
-	Title      string
-	Active     bool
-	Available  bool
-	Elements   []Element
-	ReportedAt string
-	Messages   []Message
-	Held       *Action
-	LastResult *Command
+	TabID       int
+	WindowID    int
+	URL         string
+	Title       string
+	Active      bool
+	Available   bool
+	Elements    []Element
+	ReportedAt  string
+	Messages    []Message
+	Held        *Action
+	LastResult  *Command
+	Goal        string
+	GoalURL     string
+	GoalAction  string
+	GoalSteps   int
+	GoalWaits   int
+	ContinueGen int
 }
 
 type TabReport struct {
@@ -261,6 +267,131 @@ func (s *Store) Hold(id string, tabID int, action Action) {
 	if tab := s.tabLocked(id, tabID); tab != nil {
 		tab.Held = &action
 	}
+}
+
+const maxGoalSteps = 4
+
+func (s *Store) SetGoal(id string, tabID int, goal, pageURL, actionKey string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tab := s.tabLocked(id, tabID)
+	if tab == nil {
+		return
+	}
+	tab.Goal = goal
+	tab.GoalURL = pageURL
+	tab.GoalAction = actionKey
+	tab.GoalSteps = 1
+	tab.GoalWaits = 0
+	tab.ContinueGen = 0
+}
+
+func (s *Store) ClearGoal(id string, tabID int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tab := s.tabLocked(id, tabID)
+	if tab == nil {
+		return
+	}
+	tab.Goal = ""
+	tab.GoalWaits = 0
+	tab.ContinueGen = 0
+}
+
+func (s *Store) ArmContinue(id string, tabID int) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tab := s.tabLocked(id, tabID)
+	if tab == nil || tab.Goal == "" {
+		return 0
+	}
+	tab.ContinueGen++
+	return tab.ContinueGen
+}
+
+func (s *Store) BeginContinue(id string, tabID, gen int) (goal string, stop string, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, exists := s.sessions[id]
+	if !exists || gen == 0 {
+		return "", "", false
+	}
+	tab := sess.Tabs[tabID]
+	if tab == nil || tab.ContinueGen != gen || tab.Goal == "" {
+		return "", "", false
+	}
+	tab.ContinueGen = 0
+	if tab.GoalSteps >= maxGoalSteps {
+		tab.Goal = ""
+		return "", "limit", true
+	}
+	return tab.Goal, "", true
+}
+
+func (s *Store) GoalAction(id string, tabID int) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, exists := s.sessions[id]
+	if !exists {
+		return ""
+	}
+	tab := sess.Tabs[tabID]
+	if tab == nil {
+		return ""
+	}
+	return tab.GoalAction
+}
+
+func (s *Store) GoalURL(id string, tabID int) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, exists := s.sessions[id]
+	if !exists {
+		return ""
+	}
+	tab := sess.Tabs[tabID]
+	if tab == nil {
+		return ""
+	}
+	return tab.GoalURL
+}
+
+func (s *Store) NoteGoalAction(id string, tabID int, pageURL, actionKey string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tab := s.tabLocked(id, tabID)
+	if tab == nil {
+		return
+	}
+	tab.GoalURL = pageURL
+	tab.GoalAction = actionKey
+	tab.GoalSteps++
+	tab.GoalWaits = 0
+}
+
+func (s *Store) NoteSamePageWait(id string, tabID int) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tab := s.tabLocked(id, tabID)
+	if tab == nil {
+		return 0
+	}
+	tab.GoalWaits++
+	return tab.GoalWaits
+}
+
+func (s *Store) GoalMoved(id string, tabID int, pageURL string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sess, exists := s.sessions[id]
+	if !exists {
+		return 0
+	}
+	tab := sess.Tabs[tabID]
+	if tab == nil || tab.ContinueGen == 0 || tab.GoalURL == "" || pageURL == "" || pageURL == tab.GoalURL {
+		return 0
+	}
+	return tab.ContinueGen
 }
 
 func (s *Store) ClearHeld(id string, tabID int) {

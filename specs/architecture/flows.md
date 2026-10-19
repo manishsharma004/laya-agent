@@ -39,6 +39,8 @@ The user line is stored before `/decide` returns. A slow checkpoint load leaves 
 
 The command desk uses the same `POST /v1/chat`. Its `tabId` is the tab selected in the desk, which can differ from the browser's active tab.
 
+The same request stays active after the click. When the tab reports a new address, the gateway decides again with the original words. It stops when the next decision has nothing to do, when the address or title already contains the destination (no checkpoint load), when the next click would repeat the same control, or after four actions. A click that has not changed the address yet keeps the request armed instead of stopping early. A confirmation still pauses the loop until the person confirms. A name match ignores spaces and prefers the longest name, so “signin” selects “Sign in” rather than a shorter “Gmail” link.
+
 ## Confirm
 
 ```mermaid
